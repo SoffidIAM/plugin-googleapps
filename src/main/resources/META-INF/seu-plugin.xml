@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<seuServerPlugin  xmlns="http://seu.sourceforge.net/schema/serverplugin" 
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://seu.sourceforge.net/schema/ServerPlugin.xsd" >
+	<name>GoogleApps plugin</name>
+	<version>${pom.version}</version>
+	<agent>
+		<name>GoogleApps</name>
+		<javaClass>es.caib.seycon.agent.GoogleAppsAgent</javaClass>
+		<userInterface>GoogleAppsAgent.zul</userInterface>
+		<enableAccessControl>N</enableAccessControl>
+	</agent>	
+</seuServerPlugin>
