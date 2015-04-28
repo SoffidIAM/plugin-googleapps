@@ -14,7 +14,7 @@
  */
 
 
-package es.caib.seycon.agent.googleapps;
+package com.soffid.iam.sync.agent.googleapps;
 
 /**
  * Contains constants used by the GMail Settings API sample clients.
