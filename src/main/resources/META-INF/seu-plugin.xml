@@ -7,8 +7,52 @@
 	<version>${pom.version}</version>
 	<agent>
 		<name>GoogleApps</name>
-		<javaClass>es.caib.seycon.agent.GoogleAppsAgent</javaClass>
+		<javaClass>com.soffid.iam.sync.agent.googleapps.GoogleAppsAgent</javaClass>
 		<userInterface>GoogleAppsAgent.zul</userInterface>
 		<enableAccessControl>N</enableAccessControl>
+
+		<enableAttributeMapping>true</enableAttributeMapping>
+
+		<object systemObject="user" soffidObject="user">
+			<mapping soffidAttribute='firstName' 
+				systemAttribute='name{"givenName"}'
+				direction="inout" />
+			<mapping soffidAttribute='fullName' 
+				systemAttribute='name{"fullName"}'
+				direction="inout" />
+			<mapping soffidAttribute='lastName' 
+				systemAttribute='name{"familyName"}'
+				direction="inout" />
+			<mapping soffidAttribute='accountName' systemAttribute="primaryEmail"
+				direction="inout" />
+			<mapping soffidAttribute='accountDisabled' systemAttribute="suspended"
+				direction="inout" />
+		</object>
+
+		<object systemObject="account" soffidObject="account">
+			<mapping soffidAttribute='accountDescription' 
+				systemAttribute='name{"givenName"}'
+				direction="out" />
+			<mapping soffidAttribute='"account"' 
+				systemAttribute='name{"familyName"}'
+				direction="out" />
+			<mapping soffidAttribute='accountDescription' 
+				systemAttribute='name{"fullName"}'
+				direction="inout" />
+			<mapping soffidAttribute='accountName' systemAttribute="primaryEmail"
+				direction="inout" />
+			<mapping soffidAttribute='accountDisabled' systemAttribute="suspended"
+				direction="inout" />
+		</object>
+
+		<object systemObject="group" soffidObject="group">
+			<mapping soffidAttribute='name' 
+				systemAttribute='name'
+				direction="inout" />
+		</object>
+
+
+
+
 	</agent>	
 </seuServerPlugin>

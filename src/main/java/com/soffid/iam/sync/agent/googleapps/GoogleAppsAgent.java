@@ -4,18 +4,24 @@ import java.io.IOException;
 import java.io.StringReader;
 import java.io.UnsupportedEncodingException;
 import java.rmi.RemoteException;
+import java.security.KeyFactory;
 import java.security.KeyPair;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.security.PrivateKey;
+import java.security.spec.InvalidKeySpecException;
+import java.security.spec.PKCS8EncodedKeySpec;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
+import javax.servlet.http.HttpServletResponse;
 import javax.xml.rpc.ServiceException;
 
 import org.bouncycastle.openssl.PEMReader;
@@ -23,15 +29,23 @@ import org.bouncycastle.util.encoders.Hex;
 
 import com.google.api.client.googleapis.auth.oauth2.GoogleCredential;
 import com.google.api.client.googleapis.javanet.GoogleNetHttpTransport;
+import com.google.api.client.googleapis.json.GoogleJsonResponseException;
 import com.google.api.client.http.javanet.NetHttpTransport;
 import com.google.api.client.json.jackson2.JacksonFactory;
+import com.google.api.client.util.PemReader;
+import com.google.api.client.util.SecurityUtils;
+import com.google.api.client.util.PemReader.Section;
 import com.google.api.services.admin.directory.Directory;
+import com.google.api.services.admin.directory.Directory.Users.Get;
 import com.google.api.services.admin.directory.DirectoryScopes;
+import com.google.api.services.admin.directory.model.Alias;
 import com.google.api.services.admin.directory.model.Group;
 import com.google.api.services.admin.directory.model.Member;
 import com.google.api.services.admin.directory.model.Members;
 import com.google.api.services.admin.directory.model.OrgUnit;
 import com.google.api.services.admin.directory.model.User;
+import com.google.api.services.admin.directory.model.UserEmail;
+import com.google.api.services.admin.directory.model.UserName;
 import com.google.api.services.admin.directory.model.Users;
 
 import es.caib.seycon.ng.comu.Account;
@@ -44,6 +58,7 @@ import es.caib.seycon.ng.comu.SoffidObjectType;
 import es.caib.seycon.ng.comu.Usuari;
 import es.caib.seycon.ng.exception.InternalErrorException;
 import es.caib.seycon.ng.exception.UnknownGroupException;
+import es.caib.seycon.ng.exception.UnknownRoleException;
 import es.caib.seycon.ng.sync.engine.extobj.AccountExtensibleObject;
 import es.caib.seycon.ng.sync.engine.extobj.GroupExtensibleObject;
 import es.caib.seycon.ng.sync.engine.extobj.ObjectTranslator;
@@ -53,11 +68,12 @@ import es.caib.seycon.ng.sync.intf.ExtensibleObjectMapping;
 import es.caib.seycon.ng.sync.intf.ExtensibleObjectMgr;
 import es.caib.seycon.ng.sync.intf.GroupMgr;
 import es.caib.seycon.ng.sync.intf.MailAliasMgr;
+import es.caib.seycon.ng.sync.intf.RoleMgr;
 import es.caib.seycon.ng.sync.intf.UserMgr;
 import es.caib.seycon.util.TimedOutException;
 
 public class GoogleAppsAgent extends es.caib.seycon.ng.sync.agent.Agent
-		implements UserMgr, MailAliasMgr, GroupMgr, ExtensibleObjectMgr {
+		implements UserMgr, MailAliasMgr, GroupMgr, ExtensibleObjectMgr, RoleMgr {
 
 	private static final String APPS_APPLICATION_NAME = "SOFFID-SYNCSERVER-1_0";// [company-id]-[app-name]-[app-version]
 
@@ -105,10 +121,16 @@ public class GoogleAppsAgent extends es.caib.seycon.ng.sync.agent.Agent
 		this.accountId = getDispatcher().getParam1();
 	
 		try {
-			String pk = getDispatcher().getParam2().replaceAll("\\\\n", "\n");
-			PEMReader pemReader = new PEMReader(new StringReader (pk));
-			KeyPair keyPair =  (KeyPair) pemReader.readObject();
-			privateKey = keyPair.getPrivate();
+			String pk = new String(getDispatcher().getBlobParam(), "UTF-8").replaceAll("\\\\n", "\n");
+		    Section section = PemReader.readFirstSectionAndClose(
+		    		new StringReader(pk), "PRIVATE KEY");
+		    if (section == null) {
+		      throw new IOException("Invalid PEM key data.");
+		    }
+		    byte[] bytes = section.getBase64DecodedBytes();
+		    PKCS8EncodedKeySpec keySpec = new PKCS8EncodedKeySpec(bytes);
+		    KeyFactory keyFactory = SecurityUtils.getRsaKeyFactory();
+		    privateKey = keyFactory.generatePrivate(keySpec);
 		} catch (Throwable t) {
 			throw new InternalErrorException("Error parsing private key", t);
 		}
@@ -207,9 +229,13 @@ public class GoogleAppsAgent extends es.caib.seycon.ng.sync.agent.Agent
 						account, getCodi());
 				
 				user = new User();
+				user.setPassword(encodePassword(password));
+				user.setHashFunction("SHA-1");
+				user.setChangePasswordAtNextLogin(false);
+				user.setName(new UserName());
 				for (String key: obj.keySet())
 				{
-					user.set(key, obj.get(key));
+					copyAttribute (user, obj, key);
 				}
 				
 				if (! obj.containsKey("orgUnitPath") && ui != null)
@@ -221,7 +247,7 @@ public class GoogleAppsAgent extends es.caib.seycon.ng.sync.agent.Agent
 				for (String key: obj.keySet())
 				{
 					if (! key.equals("id"))
-						user.set(key, obj.get(key));
+						copyAttribute(user, obj, key);
 				}
 				if (! obj.containsKey("orgUnitPath") && ui != null)
 				{
@@ -238,6 +264,29 @@ public class GoogleAppsAgent extends es.caib.seycon.ng.sync.agent.Agent
 			throw new InternalErrorException(e.getMessage(), e);
 		}
 
+	}
+
+	private void copyAttribute(Map<String,Object> target, Map<String,Object> source, String key) {
+		Object src = source.get(key);
+		
+		if (src instanceof Map)
+		{
+			Map<String,Object> t = (Map<String, Object>) target.get(key);
+			if (t == null)
+			{
+				t = new HashMap<String, Object>();
+				target.put(key, t);
+			}
+			Map<String,Object> srcMap = (Map<String,Object>) src;
+			for (String key2: srcMap.keySet())
+			{
+				copyAttribute(t, srcMap, key2);
+			}
+		}
+		else
+		{
+			target.put(key, src);
+		}
 	}
 
 	private String getOrgUnitPathString(String groupName, boolean create) throws InternalErrorException, IOException {
@@ -395,8 +444,9 @@ public class GoogleAppsAgent extends es.caib.seycon.ng.sync.agent.Agent
 				u2.setId(u.getId());
 				u2.setHashFunction("SHA-1");
 				u2.setPrimaryEmail(u.getPrimaryEmail());
-				byte[] hash = MessageDigest.getInstance("SHA-1").digest(password.getPassword().getBytes("UTF-8"));
-				u2.setPassword( base16 (hash));
+				String encodedPassword = encodePassword(password);
+				u2.setPassword( encodedPassword);
+				u2.setChangePasswordAtNextLogin(mustchange);
 				
 				getDirectory().users().patch(accountName+"@"+accountDomain, u2)
 					.execute();
@@ -408,6 +458,13 @@ public class GoogleAppsAgent extends es.caib.seycon.ng.sync.agent.Agent
 		} catch (IOException e) {
 			throw new InternalErrorException("Error updating password for "+account, e);
 		}
+	}
+
+	private String encodePassword(Password password)
+			throws NoSuchAlgorithmException, UnsupportedEncodingException {
+		byte[] hash = MessageDigest.getInstance("SHA-1").digest(password.getPassword().getBytes("UTF-8"));
+		String encodedPassword = base16 (hash);
+		return encodedPassword;
 	}
 
 	/**
@@ -428,8 +485,15 @@ public class GoogleAppsAgent extends es.caib.seycon.ng.sync.agent.Agent
 
 		log.info("Retrieving user '{}'.", user, null);
 		try {
-
-			return getDirectory().users().get(user+"@"+domini).execute();
+			Get get = getDirectory().users().get(user+"@"+domini);
+			try {
+				return get.execute();
+			} catch (GoogleJsonResponseException e) {
+				if (e.getStatusCode() == HttpServletResponse.SC_NOT_FOUND)
+					return null;
+				else
+					throw e;
+			}
 		} catch (Exception e) {
 			throw new InternalErrorException("retrieveUser (" + user + ")", e);
 		}
@@ -504,7 +568,7 @@ public class GoogleAppsAgent extends es.caib.seycon.ng.sync.agent.Agent
 	public void updateListAlias(LlistaCorreu llista)
 			throws InternalErrorException {
 		try {
-			if (llista.getCodiDomini().equals (googleDomain) &&
+			if (! llista.getCodiDomini().equals (googleDomain) &&
 					! llista.getCodiDomini().endsWith("."+googleDomain))
 				return;
 			
@@ -521,9 +585,21 @@ public class GoogleAppsAgent extends es.caib.seycon.ng.sync.agent.Agent
 					users.trim().length() == 0 )
 			{
 				removeListAlias(llista.getNom(), llista.getCodiDomini());
+				String aliasOwner = getAliasOwner(name);
+				if (aliasOwner != null)
+				{
+					removeAlias(name, aliasOwner);
+				}
 				return;
 			}
-			Group g = getDirectory().groups().get(llista.getNom()+"@"+llista.getCodiDomini()).execute();
+			Group g = null;
+			try
+			{
+				g = getDirectory().groups().get(llista.getNom()+"@"+llista.getCodiDomini()).execute();
+			} catch (GoogleJsonResponseException e) {
+				if (e.getStatusCode() != HttpServletResponse.SC_NOT_FOUND)
+					throw e;
+			}
 			
 			if (g == null) {
 				boolean singleUser = llista.getLlistaExterns().trim().isEmpty() && 
@@ -543,20 +619,16 @@ public class GoogleAppsAgent extends es.caib.seycon.ng.sync.agent.Agent
 					
 					if (aliasOwner != null)
 					{
-						User u = getDirectory().users().get(aliasOwner).execute();
-						for (Iterator<String> it = u.getAliases().iterator(); it.hasNext(); )
-						{
-							String alias = it.next();
-							if (alias.equalsIgnoreCase(name))
-								it.remove();
-						}
-						getDirectory().users().update(aliasOwner, u).execute();
+						removeAlias(name, aliasOwner);
 					}
+					
 					if (owner != null && ! owner.equals (name))
 					{
-						User u = getDirectory().users().get(aliasOwner).execute();
-						u.getAliases().add(name);
-						getDirectory().users().update(aliasOwner, u).execute();
+						User u = getDirectory().users().get(owner).execute();
+						Alias alias = new Alias ();
+						alias.setAlias(name);
+						alias.setPrimaryEmail(u.getPrimaryEmail());
+						getDirectory().users().aliases().insert(u.getId(), alias).execute();
 						return;
 					}
 					else
@@ -566,14 +638,7 @@ public class GoogleAppsAgent extends es.caib.seycon.ng.sync.agent.Agent
 				}
 				else if (aliasOwner != null)
 				{
-					User u = getDirectory().users().get(aliasOwner).execute();
-					for (Iterator<String> it = u.getAliases().iterator(); it.hasNext(); )
-					{
-						String alias = it.next();
-						if (alias.equalsIgnoreCase(name))
-							it.remove();
-					}
-					getDirectory().users().update(aliasOwner, u).execute();
+					removeAlias(name, aliasOwner);
 				}
 				g = new Group ();
 				g.setAdminCreated(true);
@@ -587,6 +652,26 @@ public class GoogleAppsAgent extends es.caib.seycon.ng.sync.agent.Agent
 			e.printStackTrace();
 			throw new InternalErrorException("Error processing task", e);
 		}
+	}
+
+	private void removeAlias(String name, String aliasOwner) throws IOException {
+		User u = getDirectory().users().get(aliasOwner).execute();
+		
+		getDirectory().users().aliases().delete(u.getId(), name).execute();
+		
+		if (u.getEmails() != null && u.getEmails() instanceof Collection)
+		{
+			Iterator<UserEmail> it = ((Collection<UserEmail>) u.getEmails()).iterator();
+			while (it.hasNext())
+			{
+				Map<String,Object> ue = it.next();
+				if (ue.get("address") != null &&
+						name.equalsIgnoreCase(ue.get("address").toString()))
+					it.remove();
+			}
+		}
+		
+		getDirectory().users().update(u.getId(), u).execute();
 	}
 
 	String getUserEmail (String user) throws InternalErrorException, es.caib.seycon.ng.exception.UnknownUserException
@@ -612,8 +697,10 @@ public class GoogleAppsAgent extends es.caib.seycon.ng.sync.agent.Agent
 	}
 	
 	private String getAliasOwner(String email) throws IOException {
-		Users users = getDirectory().users().list().setQuery("email="+email).execute();
-		if (users.getUsers().size() > 0)
+		Users users = getDirectory().users().list()
+				.setDomain(googleDomain)
+				.setQuery("email:"+email).execute();
+		if (users.getUsers() != null && users.getUsers().size() > 0)
 		{
 			return users.getUsers().get(0).getPrimaryEmail();
 		}
@@ -627,9 +714,12 @@ public class GoogleAppsAgent extends es.caib.seycon.ng.sync.agent.Agent
 		Members members = getDirectory().members().list(g.getId()).execute();
 
 		Set<String> current = new HashSet<String>();
-		for (Member member: members.getMembers())
+		if (members.getMembers() != null)
 		{
-			current.add(member.getEmail());
+			for (Member member: members.getMembers())
+			{
+				current.add(member.getEmail());
+			}
 		}
 		Set<String> newMembers = new HashSet<String>();
 		if (llista.getLlistaExterns().trim().length() > 0 )
@@ -697,9 +787,106 @@ public class GoogleAppsAgent extends es.caib.seycon.ng.sync.agent.Agent
 			Group g = getDirectory().groups().get(list+"@"+domain).execute();
 			if (g != null)
 				getDirectory().groups().delete(g.getId()).execute();
+		} catch (GoogleJsonResponseException e) {
+			if (e.getStatusCode() != HttpServletResponse.SC_NOT_FOUND)
+				throw new InternalErrorException("Error processing task", e);
+		} catch (IOException e) {
+			throw new InternalErrorException("Error processing task", e);
+		}
+	}
+
+	public void removeRole(String role, String system) throws RemoteException,
+			InternalErrorException {
+		String[] split = role.split("@");
+		String roleName = split[0];
+		String roleDomain = split.length > 1 ? split[1] : googleDomain;
+
+		String name = roleName+"@"+roleDomain;
+		Group g = null;
+		try
+		{
+			g = getDirectory().groups().get(name).execute();
+			getDirectory().groups().delete(g.getId()).execute();
+		} catch (GoogleJsonResponseException e) {
+			if (e.getStatusCode() != HttpServletResponse.SC_NOT_FOUND)
+				throw new InternalErrorException("Error locating group "+name, e);
+		} catch (IOException e) {
+			throw new InternalErrorException("Error locating group "+name, e);
+		}
+		
+	}
+
+	public void updateRole(Rol role) throws RemoteException,
+			InternalErrorException {
+		try {
+			String[] split = role.getNom().split("@");
+			String roleName = split[0];
+			String roleDomain = split.length > 1 ? split[1] : googleDomain;
+
+			String name = roleName+"@"+roleDomain;
+			Group g = null;
+			try
+			{
+				g = getDirectory().groups().get(name).execute();
+			} catch (GoogleJsonResponseException e) {
+				if (e.getStatusCode() != HttpServletResponse.SC_NOT_FOUND)
+					throw e;
+			}
+			
+			if (g == null) {
+				g = new Group ();
+				g.setAdminCreated(true);
+				g.setDescription(role.getDescripcio());
+				g.setName(roleName);
+				g.setEmail(name);
+				g = getDirectory().groups().insert(g).execute();
+			}
+			setRoleMembers(name, g, role);
 		} catch (Exception e) {
 			e.printStackTrace();
 			throw new InternalErrorException("Error processing task", e);
+		}
+		
+	}
+
+	private void setRoleMembers(String name, Group g, Rol role) throws InternalErrorException, UnknownRoleException, IOException {
+		Members members = getDirectory().members().list(g.getId()).execute();
+
+		Set<String> current = new HashSet<String>();
+		if (members.getMembers() != null)
+		{
+			for (Member member: members.getMembers())
+			{
+				current.add(member.getEmail());
+			}
+		}
+
+		Set<String> newMembers = new HashSet<String>();
+		for (Account acc: getServer().getRoleActiveAccounts(role.getId(), getCodi()))
+		{
+			String accountName = acc.getName();
+			if (! accountName.contains("@"))
+				accountName = accountName + "@" + googleDomain;
+			newMembers.add(accountName);
+		}
+
+		// Adds new members
+		for (String newMember : newMembers) {
+			if (!current.contains(newMember)) {
+				Member m = new Member();
+				m.setEmail(newMember);
+				m.setRole("MEMBER");
+				getDirectory().members().insert(g.getId(), m).execute();
+			} else {
+				current.remove(newMember);
+			}
+		}
+
+		// Removes old members
+		for (String oldMember : current) {
+			Member m = getDirectory().members().get(g.getId(), oldMember).execute();
+			if (m !=  null)
+				getDirectory().members().delete(g.getId(), m.getId()).execute();
 		}
 	}
 

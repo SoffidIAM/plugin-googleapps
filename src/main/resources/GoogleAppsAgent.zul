@@ -8,23 +8,37 @@
 	<columns visible="false"><column width="14%"/><column/> </columns>
 	<rows>
 		<row>
-			<input_etiqueta value="Usuari Administrador" />
+			<input_etiqueta value="Admin user" />
 			<hbox width="90%">
 				<input_dada bind="@param0" lectura="${!canModifyAgent}"
 					width_custom="98%" />
 			</hbox>
 		</row>
 		<row>
-			<input_etiqueta value="Password d'administrador" />
+			<input_etiqueta value="Service account client email" />
 			<hbox width="90%">
-				<input_password bind="@param1" lectura="${!canModifyAgent}"
+				<input_dada bind="@param1" lectura="${!canModifyAgent}"
 					width_custom="98%" />
 			</hbox>
 		</row>
 		<row>
-			<input_etiqueta value="Domini" />
+			<input_etiqueta value="Service account private key" />
 			<hbox width="90%">
-				<input_dada bind="@param2" lectura="${!canModifyAgent}"
+				<textbox rows="5" multiline="true" sclass="textbox" value="** CONCEALED **"
+					width="100%">
+					<attribute name="onChange"><![CDATA[
+	{
+		ctx = es.caib.zkib.datasource.XPathUtils.getComponentContext(self);
+		es.caib.zkib.datasource.XPathUtils.setValue (ctx, "@blobParam", self.getValue().getBytes("UTF-8"));
+	}
+					]]></attribute>
+				</textbox>	
+			</hbox>
+		</row>
+		<row>
+			<input_etiqueta value="Google domain" />
+			<hbox width="90%">
+				<input_dada bind="param3" lectura="${!canModifyAgent}"
 					width_custom="98%" />
 			</hbox>
 		</row>
