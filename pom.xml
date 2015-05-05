@@ -28,6 +28,11 @@
 			<scope>test</scope>
 		</dependency>
 		<dependency>
+			<groupId>com.soffid.iam.console</groupId>
+			<artifactId>iam-common</artifactId>
+			<version>1.5.11-1</version>
+		</dependency>
+		<dependency>
 			<groupId>com.soffid.iam.sync</groupId>
 			<artifactId>syncserver</artifactId>
 			<version>1.5.6</version>
