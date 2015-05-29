@@ -797,21 +797,24 @@ public class GoogleAppsAgent extends es.caib.seycon.ng.sync.agent.Agent
 
 	public void removeRole(String role, String system) throws RemoteException,
 			InternalErrorException {
-		String[] split = role.split("@");
-		String roleName = split[0];
-		String roleDomain = split.length > 1 ? split[1] : googleDomain;
-
-		String name = roleName+"@"+roleDomain;
-		Group g = null;
-		try
+		if (system.equals(getCodi()))
 		{
-			g = getDirectory().groups().get(name).execute();
-			getDirectory().groups().delete(g.getId()).execute();
-		} catch (GoogleJsonResponseException e) {
-			if (e.getStatusCode() != HttpServletResponse.SC_NOT_FOUND)
+			String[] split = role.split("@");
+			String roleName = split[0];
+			String roleDomain = split.length > 1 ? split[1] : googleDomain;
+	
+			String name = roleName+"@"+roleDomain;
+			Group g = null;
+			try
+			{
+				g = getDirectory().groups().get(name).execute();
+				getDirectory().groups().delete(g.getId()).execute();
+			} catch (GoogleJsonResponseException e) {
+				if (e.getStatusCode() != HttpServletResponse.SC_NOT_FOUND)
+					throw new InternalErrorException("Error locating group "+name, e);
+			} catch (IOException e) {
 				throw new InternalErrorException("Error locating group "+name, e);
-		} catch (IOException e) {
-			throw new InternalErrorException("Error locating group "+name, e);
+			}
 		}
 		
 	}
@@ -819,29 +822,32 @@ public class GoogleAppsAgent extends es.caib.seycon.ng.sync.agent.Agent
 	public void updateRole(Rol role) throws RemoteException,
 			InternalErrorException {
 		try {
-			String[] split = role.getNom().split("@");
-			String roleName = split[0];
-			String roleDomain = split.length > 1 ? split[1] : googleDomain;
-
-			String name = roleName+"@"+roleDomain;
-			Group g = null;
-			try
+			if (role.getBaseDeDades().equals(getCodi()))
 			{
-				g = getDirectory().groups().get(name).execute();
-			} catch (GoogleJsonResponseException e) {
-				if (e.getStatusCode() != HttpServletResponse.SC_NOT_FOUND)
-					throw e;
+				String[] split = role.getNom().split("@");
+				String roleName = split[0];
+				String roleDomain = split.length > 1 ? split[1] : googleDomain;
+	
+				String name = roleName+"@"+roleDomain;
+				Group g = null;
+				try
+				{
+					g = getDirectory().groups().get(name).execute();
+				} catch (GoogleJsonResponseException e) {
+					if (e.getStatusCode() != HttpServletResponse.SC_NOT_FOUND)
+						throw e;
+				}
+				
+				if (g == null) {
+					g = new Group ();
+					g.setAdminCreated(true);
+					g.setDescription(role.getDescripcio());
+					g.setName(roleName);
+					g.setEmail(name);
+					g = getDirectory().groups().insert(g).execute();
+				}
+				setRoleMembers(name, g, role);
 			}
-			
-			if (g == null) {
-				g = new Group ();
-				g.setAdminCreated(true);
-				g.setDescription(role.getDescripcio());
-				g.setName(roleName);
-				g.setEmail(name);
-				g = getDirectory().groups().insert(g).execute();
-			}
-			setRoleMembers(name, g, role);
 		} catch (Exception e) {
 			e.printStackTrace();
 			throw new InternalErrorException("Error processing task", e);
