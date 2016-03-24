@@ -322,10 +322,22 @@ public class GoogleAppsAgent extends es.caib.seycon.ng.sync.agent.Agent
 		    				if (name != null)
 		    				{
 		    					path.add(name);
-		    					OrgUnit orgunit = getDirectory().orgunits().get(customerId, path).execute();
-		    					if (orgunit == null && create)
-		    					{
-	    							updateGroup (path, obj);
+		    					try {
+			    					OrgUnit orgunit = getDirectory().orgunits().get(customerId, path).execute();
+			    					if (orgunit == null && create)
+			    					{
+		    							updateGroup (path, obj);
+			    					}
+		    					} catch (GoogleJsonResponseException e) {
+		    						if (e.getStatusCode() == HttpServletResponse.SC_NOT_FOUND)
+		    						{
+				    					if (create)
+				    					{
+			    							updateGroup (path, obj);
+				    					}
+		    						} else {
+		    							throw new InternalErrorException("Error looking for group "+path, e);
+		    						}
 		    					}
 		    				}
 		    			}
@@ -356,7 +368,13 @@ public class GoogleAppsAgent extends es.caib.seycon.ng.sync.agent.Agent
 			
 		if (parentPath.length() == 0)
 			parentPath.append("/");
-		OrgUnit orgunit = getDirectory().orgunits().get(customerId, path).execute();
+		OrgUnit orgunit = null;
+		try {
+			orgunit = getDirectory().orgunits().get(customerId, path).execute();
+		} catch (GoogleJsonResponseException e) {
+			if (e.getStatusCode() != HttpServletResponse.SC_NOT_FOUND)
+				throw new IOException("Error looking for group "+path, e);
+		}
 		if (orgunit == null)
 		{
 			orgunit = new OrgUnit();
