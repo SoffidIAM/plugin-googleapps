@@ -13,6 +13,7 @@ import java.security.spec.InvalidKeySpecException;
 import java.security.spec.PKCS8EncodedKeySpec;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.Date;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -24,7 +25,6 @@ import java.util.Set;
 import javax.servlet.http.HttpServletResponse;
 import javax.xml.rpc.ServiceException;
 
-import org.bouncycastle.openssl.PEMReader;
 import org.bouncycastle.util.encoders.Hex;
 
 import com.google.api.client.googleapis.auth.oauth2.GoogleCredential;
@@ -32,6 +32,7 @@ import com.google.api.client.googleapis.javanet.GoogleNetHttpTransport;
 import com.google.api.client.googleapis.json.GoogleJsonResponseException;
 import com.google.api.client.http.javanet.NetHttpTransport;
 import com.google.api.client.json.jackson2.JacksonFactory;
+import com.google.api.client.util.DateTime;
 import com.google.api.client.util.PemReader;
 import com.google.api.client.util.SecurityUtils;
 import com.google.api.client.util.PemReader.Section;
@@ -54,6 +55,7 @@ import es.caib.seycon.ng.comu.Grup;
 import es.caib.seycon.ng.comu.LlistaCorreu;
 import es.caib.seycon.ng.comu.Password;
 import es.caib.seycon.ng.comu.Rol;
+import es.caib.seycon.ng.comu.RolGrant;
 import es.caib.seycon.ng.comu.SoffidObjectType;
 import es.caib.seycon.ng.comu.Usuari;
 import es.caib.seycon.ng.exception.InternalErrorException;
@@ -63,17 +65,19 @@ import es.caib.seycon.ng.sync.engine.extobj.AccountExtensibleObject;
 import es.caib.seycon.ng.sync.engine.extobj.GroupExtensibleObject;
 import es.caib.seycon.ng.sync.engine.extobj.ObjectTranslator;
 import es.caib.seycon.ng.sync.engine.extobj.UserExtensibleObject;
+import es.caib.seycon.ng.sync.engine.extobj.ValueObjectMapper;
 import es.caib.seycon.ng.sync.intf.ExtensibleObject;
 import es.caib.seycon.ng.sync.intf.ExtensibleObjectMapping;
 import es.caib.seycon.ng.sync.intf.ExtensibleObjectMgr;
 import es.caib.seycon.ng.sync.intf.GroupMgr;
 import es.caib.seycon.ng.sync.intf.MailAliasMgr;
+import es.caib.seycon.ng.sync.intf.ReconcileMgr2;
 import es.caib.seycon.ng.sync.intf.RoleMgr;
 import es.caib.seycon.ng.sync.intf.UserMgr;
 import es.caib.seycon.util.TimedOutException;
 
 public class GoogleAppsAgent extends es.caib.seycon.ng.sync.agent.Agent
-		implements UserMgr, MailAliasMgr, GroupMgr, ExtensibleObjectMgr, RoleMgr {
+		implements UserMgr, MailAliasMgr, GroupMgr, ExtensibleObjectMgr, RoleMgr, ReconcileMgr2 {
 
 	private static final String APPS_APPLICATION_NAME = "SOFFID-SYNCSERVER-1_0";// [company-id]-[app-name]-[app-version]
 
@@ -266,6 +270,76 @@ public class GoogleAppsAgent extends es.caib.seycon.ng.sync.agent.Agent
 
 	}
 
+	protected ExtensibleObject findGoogleUser (String account, ExtensibleObjectMapping mapping) throws InternalErrorException
+	{
+
+		boolean active;
+
+		try {
+			// Mirem si ja existeix l'usuari a google
+
+			String[] split = account.split("@");
+			String accountName = split[0];
+			String accountDomain = split.length > 1 ? split[1] : googleDomain;
+			User user = retrieveUser(accountName, accountDomain);
+
+			if (user != null) { // USUARI NOU
+//				log.info("l'usuari {} no existeix a google, el creem", account,
+//						null);
+				
+				ExtensibleObject obj = new ExtensibleObject ();
+				obj.setObjectType(mapping.getSystemObject());
+				for (String key: user.keySet())
+				{
+					copyAttribute (obj, user, key);
+				}
+				return obj;
+			} else { 
+				return null;
+			}
+
+		} catch (InternalErrorException e) {
+			e.printStackTrace();
+			throw e;
+		} catch (Exception e) {
+			e.printStackTrace();
+			throw new InternalErrorException(e.getMessage(), e);
+		}
+
+	}
+
+	private Object copyAttribute(Object src) {
+		if (src instanceof Map)
+		{
+			HashMap<String, Object> t = new HashMap<String, Object>();
+			Map<String,Object> srcMap = (Map<String,Object>) src;
+			for (String key2: srcMap.keySet())
+			{
+				copyAttribute(t, srcMap, key2);
+			}
+			return t;
+		}
+		else if (src instanceof Collection)
+		{
+			LinkedList<Object> t = new LinkedList<Object>();
+			Collection<Object> srcMap = (Collection<Object>) src;
+			for (Object o: srcMap)
+			{
+				t.add( copyAttribute ( o ) );
+			}
+			return t;
+		}
+		else if (src instanceof DateTime)
+		{
+			return new Date ( ((DateTime) src).getValue() );
+		}
+		else
+		{
+			return src;
+		}
+		
+	}
+
 	private void copyAttribute(Map<String,Object> target, Map<String,Object> source, String key) {
 		Object src = source.get(key);
 		
@@ -283,9 +357,23 @@ public class GoogleAppsAgent extends es.caib.seycon.ng.sync.agent.Agent
 				copyAttribute(t, srcMap, key2);
 			}
 		}
+		else if (src instanceof Collection)
+		{
+			Collection<Object> t = (Collection<Object>) target.get(key);
+			if (t == null)
+			{
+				t = new LinkedList<Object>();
+				target.put(key, t);
+			}
+			Collection<Object> srcMap = (Collection<Object>) src;
+			for (Object o: srcMap)
+			{
+				t.add( copyAttribute ( o ) );
+			}
+		}
 		else
 		{
-			target.put(key, src);
+			target.put(key,  copyAttribute(src));
 		}
 	}
 
@@ -912,6 +1000,98 @@ public class GoogleAppsAgent extends es.caib.seycon.ng.sync.agent.Agent
 			if (m !=  null)
 				getDirectory().members().delete(g.getId(), m.getId()).execute();
 		}
+	}
+
+	public List<RolGrant> getAccountGrants(String arg0) throws RemoteException, InternalErrorException {
+		return new LinkedList<RolGrant>();
+	}
+
+	public Account getAccountInfo(String account) throws RemoteException, InternalErrorException {
+		try {
+			for (ExtensibleObjectMapping mapping: objectMappings)
+			{
+				if (mapping.getSoffidObject().equals (SoffidObjectType.OBJECT_ACCOUNT) )
+				{
+					ExtensibleObject obj = findGoogleUser(account, mapping);
+					if (obj != null)
+					{
+						ExtensibleObject src = objectTranslator.parseInputObject(obj, mapping);
+		    			if (obj != null)
+		    			{
+		    				return new ValueObjectMapper().parseAccount(src);
+		    			}
+					}
+				}
+			}
+			return null;
+		}
+		catch (InternalErrorException e)
+		{
+			throw e;
+		} catch (Exception e) {
+			throw new InternalErrorException(e.getMessage(), e);
+		}
+	}
+
+	public List<String> getAccountsList() throws RemoteException, InternalErrorException {
+		LinkedList<String> r  = new LinkedList<String>();
+		
+		Users users;
+		try {
+			users = getDirectory().users().list().execute();
+		} catch (IOException e) {
+			throw new InternalErrorException("Error invoking google apps" ,e);
+		}
+	
+		for ( User user: users.getUsers())
+		{
+			r.add(user.getPrimaryEmail());
+		}
+		return r;
+	}
+
+	public Rol getRoleFullInfo(String arg0) throws RemoteException, InternalErrorException {
+		return null;
+	}
+
+	public List<String> getRolesList() throws RemoteException, InternalErrorException {
+		return new LinkedList<String>();
+	}
+
+	public ExtensibleObject getNativeObject(SoffidObjectType type, String object1, String object2)
+			throws RemoteException, InternalErrorException {
+		for (ExtensibleObjectMapping mapping: objectMappings)
+		{
+			if (mapping.getSoffidObject().equals (type) )
+			{
+				ExtensibleObject obj = findGoogleUser(object1, mapping);
+				if (obj != null)
+				{
+					return obj;
+				}
+			}
+		}
+		return null;
+	}
+
+	public ExtensibleObject getSoffidObject(SoffidObjectType type, String object1, String object2)
+			throws RemoteException, InternalErrorException {
+		for (ExtensibleObjectMapping mapping: objectMappings)
+		{
+			if (mapping.getSoffidObject().equals (type) )
+			{
+				ExtensibleObject obj = findGoogleUser(object1, mapping);
+				if (obj != null)
+				{
+					ExtensibleObject src = objectTranslator.parseInputObject(obj, mapping);
+	    			if (src != null)
+	    			{
+	    				return src;
+	    			}
+				}
+			}
+		}
+		return null;
 	}
 
 }

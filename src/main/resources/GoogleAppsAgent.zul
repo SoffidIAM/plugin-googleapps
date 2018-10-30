@@ -28,8 +28,8 @@
 					width="100%">
 					<attribute name="onChange"><![CDATA[
 	{
-		ctx = es.caib.zkib.datasource.XPathUtils.getComponentContext(self);
-		es.caib.zkib.datasource.XPathUtils.setValue (ctx, "@blobParam", self.getValue().getBytes("UTF-8"));
+		Object bindCtx = es.caib.zkib.datasource.XPathUtils.getComponentContext(self);
+		es.caib.zkib.datasource.XPathUtils.setValue (bindCtx, "@blobParam", self.getValue().getBytes("UTF-8"));
 	}
 					]]></attribute>
 				</textbox>	
