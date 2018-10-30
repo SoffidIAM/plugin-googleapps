@@ -10,7 +10,7 @@
 	<artifactId>googleApps-plugin</artifactId>
 	<packaging>jar</packaging>
 	<name>GoogleApps plugin</name>
-	<version>2.0.2-SNAPSHOT</version>
+	<version>2.0.2</version>
 	<scm>
 		<connection>scm:git:ssh://git@github.com/SoffidIAM/plugin-googleapps.git</connection>
 	  <tag>HEAD</tag>
