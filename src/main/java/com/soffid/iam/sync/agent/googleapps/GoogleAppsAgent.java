@@ -1038,7 +1038,10 @@ public class GoogleAppsAgent extends es.caib.seycon.ng.sync.agent.Agent
 		
 		Users users;
 		try {
-			users = getDirectory().users().list().execute();
+			users = getDirectory().users().list()
+						.setCustomer(customerId)
+						.setFields("users/primaryEmail")
+						.execute();
 		} catch (IOException e) {
 			throw new InternalErrorException("Error invoking google apps" ,e);
 		}
