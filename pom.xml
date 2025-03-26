@@ -1,10 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-v4_0_0.xsd">
-	<parent>
-		<artifactId>plugins</artifactId>
-		<groupId>com.soffid.iam.sync</groupId>
-		<version>1.0.1</version>
-	</parent>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-v4_0_0.xsd">
 	<modelVersion>4.0.0</modelVersion>
 	<groupId>com.soffid.iam.sync.plugins</groupId>
 	<artifactId>googleApps-plugin</artifactId>
@@ -13,8 +10,8 @@
 	<version>2.0.3-SNAPSHOT</version>
 	<scm>
 		<connection>scm:git:ssh://git@github.com/SoffidIAM/plugin-googleapps.git</connection>
-	  <tag>HEAD</tag>
-  </scm>
+		<tag>HEAD</tag>
+	</scm>
 	<dependencies>
 		<dependency>
 			<groupId>com.google.apis</groupId>
@@ -30,16 +27,60 @@
 		<dependency>
 			<groupId>com.soffid.iam.console</groupId>
 			<artifactId>iam-common</artifactId>
-			<version>3.0.0</version>
+			<version>3.6.0</version>
 		</dependency>
 		<dependency>
 			<groupId>com.soffid.iam.sync</groupId>
 			<artifactId>syncserver</artifactId>
-			<version>3.0.0</version>
+			<version>3.6.0</version>
+		</dependency>
+		<dependency>
+			<groupId>com.soffid.iam.console</groupId>
+			<artifactId>iam-core</artifactId>
+			<version>3.6.0</version>
+		</dependency>
+		<dependency>
+			<groupId>com.google.apis</groupId>
+			<artifactId>google-api-services-iam-v2</artifactId>
+			<version>v2-rev20241114-2.0.0-full</version>
+		</dependency>
+		<dependency>
+			<groupId>com.google.cloud</groupId>
+			<artifactId>google-cloud-resourcemanager</artifactId>
+			<version>1.60.0</version>
+		</dependency>
+		<dependency>
+			<groupId>com.google.api-client</groupId>
+			<version>1.31.1</version>
+			<artifactId>google-api-client</artifactId>
 		</dependency>
 	</dependencies>
 	<build>
+		<resources>
+			<resource>
+				<directory>src/main/resources</directory>
+				<filtering>true</filtering>
+				<excludes>
+					<exclude>com/soffid/iam/sync/agent/native/*</exclude>
+				</excludes>
+			</resource>
+			<resource>
+				<directory>src/main/resources</directory>
+				<filtering>false</filtering>
+				<includes>
+					<include>com/soffid/iam/sync/agent/native/*</include>
+				</includes>
+			</resource>
+		</resources>
 		<plugins>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-compiler-plugin</artifactId>
+				<configuration>
+					<source>11</source>
+					<target>11</target>
+				</configuration>
+			</plugin>
 			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
 				<artifactId>maven-shade-plugin</artifactId>
@@ -54,17 +95,48 @@
 						<configuration>
 							<artifactSet>
 								<includes>
-									<include>com.google.apis:google-api-services-admin-directory</include>
-									<include>com.google.api-client:google-api-client</include>
-									<include>com.google.oauth-client:google-oauth-client</include>
-									<include>com.google.http-client:google-http-client</include>
-									<include>org.apache.httpcomponents:httpclient</include>
+									<include>
+										com.google.apis:google-api-services-admin-directory</include>
+									<include>
+										com.google.api-client:google-api-client</include>
+									<include>
+										com.google.oauth-client:google-oauth-client</include>
+									<include>
+										com.google.http-client:google-http-client</include>
+									<include>
+										org.apache.httpcomponents:httpclient</include>
+									<include>com.google.cloud:google-cloud-resourcemanager</include>
+									<include>com.google.apis:google-api-services-iam-v2</include>
+									<include>com.google.apis:google-api-services-cloudresourcemanager</include>
 									<include>org.apache.httpcomponents:httpcore</include>
+									<include>io.opencensus:opencensus-api</include>
 									<include>commons-codec:commons-codec</include>
 									<include>com.google.code.findbugs:jsr305</include>
-									<include>com.google.http-client:google-http-client-jackson2</include>
-									<include>com.fasterxml.jackson.core:jackson-core</include>
-									<include>com.google.guava:guava-jdk5</include>
+									<include>
+										com.google.http-client:google-http-client-jackson2</include>
+									<include>
+										com.fasterxml.jackson.core:jackson-core</include>
+									<include>com.google.guava:guava</include>
+									<include>io.opencensus:opencensus-contrib-http-util</include>
+									<include>com.google.api.grpc:proto-google-cloud-resourcemanager-v3</include>
+									<include>io.grpc:grpc-context</include>
+									<include>com.google.api.grpc:proto-google-iam-v1</include>
+									<include>io.grpc:grpc-api</include>
+									<include>io.grpc:grpc-stub</include>
+									<include>io.grpc:grpc-protobuf</include>
+									<include>io.grpc:grpc-protobuf-lite</include>
+									<include>com.google.api.grpc:proto-google-common-protos</include>
+									<include>com.google.api:gax-grpc</include>
+									<include>io.grpc:grpc-inprocess</include>
+									<include>io.grpc:grpc-core</include>
+									<include>io.grpc:grpc-alts</include>
+									<include>io.grpc:grpc-grpclb</include>
+									<include>io.grpc:grpc-auth</include>
+									<include>io.grpc:grpc-netty-shaded</include>
+									<include>io.grpc:grpc-util</include>
+									<include>io.grpc:grpc-googleapis</include>
+									<include>io.grpc:grpc-xds</include>
+									<include>io.grpc:grpc-services</include>
 								</includes>
 							</artifactSet>
 						</configuration>
@@ -73,8 +145,33 @@
 			</plugin>
 		</plugins>
 	</build>
-	<properties>
-		<maven.compile.source>5</maven.compile.source>
-		<maven.compile.target>5</maven.compile.target>
-	</properties>
+	<pluginRepositories>
+		<pluginRepository>
+			<id>soffid-open</id>
+			<url>https://download.soffid.com/maven</url>
+		</pluginRepository>
+	</pluginRepositories>
+	<repositories>
+		<repository>
+			<id>central</id>
+			<url>https://repo1.maven.org/maven2</url>
+		</repository>
+		<repository>
+			<id>soffid-open</id>
+			<url>https://download.soffid.com/maven</url>
+		</repository>
+	</repositories>
+	<distributionManagement>
+		<repository>
+			<uniqueVersion>true</uniqueVersion>
+			<id>soffid-open</id>
+			<name>Soffid Maven repository</name>
+			<url>${soffid.deploy.url}</url>
+		</repository>
+		<site>
+			<id>soffid-open</id>
+			<name>Soffid Maven site repository</name>
+			<url>${soffid.deploy.site.url}</url>
+		</site>
+	</distributionManagement>
 </project>

@@ -54,5 +54,41 @@
 
 
 
+	</agent>
+		<agent>
+		<name>GoogleCloud</name>
+		<javaClass>com.soffid.iam.sync.agent.googleapps.GoogleCloudAgent</javaClass>
+		<userInterface>GoogleAppsAgent.zul</userInterface>
+		<enableAccessControl>N</enableAccessControl>
+
+		<enableAttributeMapping>true</enableAttributeMapping>
+
+		<object systemObject="user" soffidObject="user">
+			<mapping soffidAttribute='accountName' systemAttribute="email"
+				direction="inout" />
+			<mapping soffidAttribute='accountDescription' systemAttribute="displayName"
+				direction="inout" />
+		</object>
+
+		<object systemObject="account" soffidObject="account">
+			<mapping soffidAttribute='accountName' systemAttribute="name"
+				direction="inout" />
+			<mapping soffidAttribute='accountDescription' systemAttribute="displayName"
+				direction="inout" />
+		</object>
+
+		<object systemObject="role" soffidObject="role">
+			<mapping soffidAttribute='name' 
+				systemAttribute='name'
+				direction="inout" />
+			<mapping soffidAttribute='description' 
+				systemAttribute='description'
+				direction="inout" />
+		</object>
+
+
+
+
 	</agent>	
+		
 </seuServerPlugin>

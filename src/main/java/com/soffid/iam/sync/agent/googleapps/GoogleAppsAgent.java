@@ -25,14 +25,17 @@ import java.util.Set;
 import javax.servlet.http.HttpServletResponse;
 import javax.xml.rpc.ServiceException;
 
+import org.bouncycastle.asn1.ocsp.ServiceLocator;
 import org.bouncycastle.util.encoders.Hex;
 
 import com.google.api.client.googleapis.auth.oauth2.GoogleCredential;
 import com.google.api.client.googleapis.javanet.GoogleNetHttpTransport;
 import com.google.api.client.googleapis.json.GoogleJsonResponseException;
 import com.google.api.client.http.javanet.NetHttpTransport;
+import com.google.api.client.json.GenericJson;
 import com.google.api.client.json.jackson2.JacksonFactory;
 import com.google.api.client.util.DateTime;
+import com.google.api.client.util.GenericData;
 import com.google.api.client.util.PemReader;
 import com.google.api.client.util.SecurityUtils;
 import com.google.api.client.util.PemReader.Section;
@@ -52,6 +55,13 @@ import com.google.api.services.admin.directory.model.User;
 import com.google.api.services.admin.directory.model.UserEmail;
 import com.google.api.services.admin.directory.model.UserName;
 import com.google.api.services.admin.directory.model.Users;
+import com.soffid.iam.api.Application;
+import com.soffid.iam.api.Domain;
+import com.soffid.iam.api.DomainValue;
+import com.soffid.iam.api.HostService;
+import com.soffid.iam.remote.RemoteServiceLocator;
+import com.soffid.iam.service.DomainService;
+import com.soffid.iam.sync.ServerServiceLocator;
 
 import es.caib.seycon.ng.comu.Account;
 import es.caib.seycon.ng.comu.AccountType;
@@ -92,9 +102,8 @@ public class GoogleAppsAgent extends es.caib.seycon.ng.sync.agent.Agent
 	private String accountId;
 
 	private Directory getDirectory() {
-		return new Directory.Builder (httpTransport, jsonFactory, googleCredential)
-			.setApplicationName(APPS_APPLICATION_NAME)
-			.build();
+		return new Directory.Builder(httpTransport, jsonFactory, googleCredential)
+				.setApplicationName(APPS_APPLICATION_NAME).build();
 
 	}
 
@@ -129,102 +138,78 @@ public class GoogleAppsAgent extends es.caib.seycon.ng.sync.agent.Agent
 
 		this.adminUser = getDispatcher().getParam0();
 		this.accountId = getDispatcher().getParam1();
-	
+
 		try {
 			String pk = new String(getDispatcher().getBlobParam(), "UTF-8").replaceAll("\\\\n", "\n");
-		    Section section = PemReader.readFirstSectionAndClose(
-		    		new StringReader(pk), "PRIVATE KEY");
-		    if (section == null) {
-		      throw new IOException("Invalid PEM key data.");
-		    }
-		    byte[] bytes = section.getBase64DecodedBytes();
-		    PKCS8EncodedKeySpec keySpec = new PKCS8EncodedKeySpec(bytes);
-		    KeyFactory keyFactory = SecurityUtils.getRsaKeyFactory();
-		    privateKey = keyFactory.generatePrivate(keySpec);
+			Section section = PemReader.readFirstSectionAndClose(new StringReader(pk), "PRIVATE KEY");
+			if (section == null) {
+				throw new IOException("Invalid PEM key data.");
+			}
+			byte[] bytes = section.getBase64DecodedBytes();
+			PKCS8EncodedKeySpec keySpec = new PKCS8EncodedKeySpec(bytes);
+			KeyFactory keyFactory = SecurityUtils.getRsaKeyFactory();
+			privateKey = keyFactory.generatePrivate(keySpec);
 		} catch (Throwable t) {
 			throw new InternalErrorException("Error parsing private key", t);
 		}
-		
+
 		googleDomain = getDispatcher().getParam3();
 		// comprovem el domini
-		if (googleDomain == null
-				|| (googleDomain != null && "".equals(googleDomain.trim())))
-			throw new InternalErrorException(
-					"Missing google domain configuration parameter");
-
+		if (googleDomain == null || (googleDomain != null && "".equals(googleDomain.trim())))
+			throw new InternalErrorException("Missing google domain configuration parameter");
 
 		String[] perms;
-		perms = new String [] {
-							DirectoryScopes.ADMIN_DIRECTORY_USER,
-							DirectoryScopes.ADMIN_DIRECTORY_ORGUNIT,
-							DirectoryScopes.ADMIN_DIRECTORY_GROUP,
-							DirectoryScopes.ADMIN_DIRECTORY_GROUP_MEMBER
-					};
-		googleCredential = new GoogleCredential.Builder()
-		.setTransport(httpTransport)
-		.setJsonFactory(jsonFactory)
-		.setServiceAccountId(accountId)
-		.setServiceAccountScopes(Arrays.asList( perms ))
-		.setServiceAccountPrivateKey(privateKey)
-		.setServiceAccountUser(adminUser)
-		.build();
-		
+		perms = new String[] { DirectoryScopes.ADMIN_DIRECTORY_USER, DirectoryScopes.ADMIN_DIRECTORY_ORGUNIT,
+				DirectoryScopes.ADMIN_DIRECTORY_GROUP, DirectoryScopes.ADMIN_DIRECTORY_GROUP_MEMBER };
+		googleCredential = new GoogleCredential.Builder().setTransport(httpTransport).setJsonFactory(jsonFactory)
+				.setServiceAccountId(accountId).setServiceAccountScopes(Arrays.asList(perms))
+				.setServiceAccountPrivateKey(privateKey).setServiceAccountUser(adminUser).build();
 
 		User u;
 		try {
 			u = getDirectory().users().get(adminUser).execute();
-		} catch (Throwable t)
-		{
-			throw new InternalErrorException ("Error testing google credentials", t);
+		} catch (Throwable t) {
+			throw new InternalErrorException("Error testing google credentials", t);
 		}
-			
-		if ( u == null)
-			throw new InternalErrorException ("User not found "+adminUser);
+
+		if (u == null)
+			throw new InternalErrorException("User not found " + adminUser);
 		customerId = u.getCustomerId();
-		
+
 	}
 
 	private boolean hasRoleMapping() {
-		for (ExtensibleObjectMapping mapping: objectMappings)
-		{
-			if (mapping.getSoffidObject().equals (SoffidObjectType.OBJECT_ROLE) )
+		for (ExtensibleObjectMapping mapping : objectMappings) {
+			if (mapping.getSoffidObject().equals(SoffidObjectType.OBJECT_ROLE))
 				return true;
 		}
 		return false;
 	}
 
-	public void updateUser(String account, Usuari user) throws RemoteException,
-			InternalErrorException {
+	public void updateUser(String account, Usuari user) throws RemoteException, InternalErrorException {
 		Account acc = getServer().getAccountInfo(account, getCodi());
 		ExtensibleObject sourceObject = new UserExtensibleObject(acc, user, getServer());
 		try {
-			for (ExtensibleObjectMapping mapping: objectMappings)
-			{
-				if (mapping.getSoffidObject().equals (SoffidObjectType.OBJECT_USER) )
-				{
-					if (objectTranslator.evalCondition(sourceObject, mapping))
-					{
-		    			ExtensibleObject obj = objectTranslator.generateObject(sourceObject, mapping);
-		    			if (obj != null)
-		    				updateGoogleUser(account, acc, user, obj);
-					}
-					else
-					{
+			for (ExtensibleObjectMapping mapping : objectMappings) {
+				if (mapping.getSoffidObject().equals(SoffidObjectType.OBJECT_USER)) {
+					if (objectTranslator.evalCondition(sourceObject, mapping)) {
+						ExtensibleObject obj = objectTranslator.generateObject(sourceObject, mapping);
+						if (obj != null)
+							updateGoogleUser(account, acc, user, obj);
+					} else {
 						disableUser(acc.getName());
 					}
 				}
 			}
-		}
-		catch (InternalErrorException e)
-		{
+		} catch (InternalErrorException e) {
 			throw e;
 		} catch (Exception e) {
 			throw new InternalErrorException(e.getMessage(), e);
 		}
 	}
 
-	protected void updateGoogleUser (String account, Account acc, Usuari ui, ExtensibleObject obj) throws InternalErrorException
-	{
+	protected void updateGoogleUser(String account, Account acc, Usuari ui, ExtensibleObject obj)
+			throws InternalErrorException {
 
 		boolean active;
 
@@ -241,36 +226,30 @@ public class GoogleAppsAgent extends es.caib.seycon.ng.sync.agent.Agent
 			boolean hasAlias = false;
 
 			if (user == null) { // USUARI NOU
-				log.info("l'usuari {} no existeix a google, el creem", account,
-						null);
+				log.info("l'usuari {} no existeix a google, el creem", account, null);
 				// Donem d'alta a l'usuari en google
-				Password password = getServer().getOrGenerateUserPassword(
-						account, getCodi());
-				
+				Password password = getServer().getOrGenerateUserPassword(account, getCodi());
+
 				user = new User();
 				user.setPassword(encodePassword(password));
 				user.setHashFunction("SHA-1");
 				user.setChangePasswordAtNextLogin(false);
 				user.setName(new UserName());
-				for (String key: obj.keySet())
-				{
-					copyAttribute (user, obj, key);
+				for (String key : obj.keySet()) {
+					copyAttribute(user, obj, key);
 				}
-				
-				if (! obj.containsKey("orgUnitPath") && ui != null)
-				{
-					user.setOrgUnitPath( getOrgUnitPathString(ui.getCodiGrupPrimari(), true) );
+
+				if (!obj.containsKey("orgUnitPath") && ui != null) {
+					user.setOrgUnitPath(getOrgUnitPathString(ui.getCodiGrupPrimari(), true));
 				}
 				user = getDirectory().users().insert(user).execute();
 			} else { // USUARI EXISTENT
-				for (String key: obj.keySet())
-				{
-					if (! key.equals("id"))
+				for (String key : obj.keySet()) {
+					if (!key.equals("id"))
 						copyAttribute(user, obj, key);
 				}
-				if (! obj.containsKey("orgUnitPath") && ui != null)
-				{
-					user.setOrgUnitPath( getOrgUnitPathString (ui.getCodiGrupPrimari(), true) );
+				if (!obj.containsKey("orgUnitPath") && ui != null) {
+					user.setOrgUnitPath(getOrgUnitPathString(ui.getCodiGrupPrimari(), true));
 				}
 				getDirectory().users().patch(user.getId(), user).execute();
 			}
@@ -288,61 +267,56 @@ public class GoogleAppsAgent extends es.caib.seycon.ng.sync.agent.Agent
 
 	private void updateUserRoles(Account acc, User user) throws IOException, InternalErrorException {
 		fetchRoles();
-		log.info("Setting permissions for "+acc.getName());
-		for (ExtensibleObjectMapping mapping: objectMappings)
-		{
-			if (mapping.getSoffidObject().equals (SoffidObjectType.OBJECT_ROLE) )
-			{
+		log.info("Setting permissions for " + acc.getName());
+		for (ExtensibleObjectMapping mapping : objectMappings) {
+			if (mapping.getSoffidObject().equals(SoffidObjectType.OBJECT_ROLE)) {
 				Collection<RolGrant> roles = getServer().getAccountRoles(acc.getName(), acc.getDispatcher());
-				Map<String,RoleAssignment> existing = new HashMap<String,RoleAssignment>();
-				
+				Map<String, RoleAssignment> existing = new HashMap<String, RoleAssignment>();
+
 				RoleAssignments assignments = null;
 				do {
-					assignments = getDirectory().roleAssignments()
-							.list(customerId)
-							.setPageToken(assignments == null ? null: assignments.getNextPageToken())
-							.setUserKey(user.getPrimaryEmail())
-							.execute();
+					assignments = getDirectory().roleAssignments().list(customerId)
+							.setPageToken(assignments == null ? null : assignments.getNextPageToken())
+							.setUserKey(user.getPrimaryEmail()).execute();
 					if (assignments.getItems() != null) {
-						for (RoleAssignment ass: assignments.getItems()) {
+						for (RoleAssignment ass : assignments.getItems()) {
 							Long roleId = ass.getRoleId();
 							Role r = rolesById.get(roleId);
 							if (r == null)
-								throw new InternalErrorException("Unknown role id "+roleId);
+								throw new InternalErrorException("Unknown role id " + roleId);
 							existing.put(r.getRoleName(), ass);
 						}
 					}
 				} while (assignments.getNextPageToken() != null);
-				
+
 				for (Iterator<RolGrant> it = roles.iterator(); it.hasNext();) {
 					RolGrant rg = it.next();
 					if (existing.containsKey(rg.getRolName())) {
 						existing.remove(rg.getRolName());
-						log.info("Keeping permissions "+rg.getRolName());
-					}
-					else {
+						log.info("Keeping permissions " + rg.getRolName());
+					} else {
 						Role r = rolesByName.get(rg.getRolName());
-						if (r == null) 
-							throw new InternalErrorException("Unknown role name "+rg.getRolName());
+						if (r == null)
+							throw new InternalErrorException("Unknown role name " + rg.getRolName());
 						RoleAssignment ass = new RoleAssignment();
 						ass.setAssignedTo(user.getId());
-						ass.setRoleId(r.getRoleId() );
+						ass.setRoleId(r.getRoleId());
 						ass.setScopeType("CUSTOMER");
 						getDirectory().roleAssignments().insert(customerId, ass).execute();
-						log.info("Adding permissions "+rg.getRolName());
+						log.info("Adding permissions " + rg.getRolName());
 					}
 				}
-				
-				for (RoleAssignment ass: existing.values()) {
-					log.info("Removing permissions "+ass.getRoleId());
+
+				for (RoleAssignment ass : existing.values()) {
+					log.info("Removing permissions " + ass.getRoleId());
 					getDirectory().roleAssignments().delete(customerId, ass.getRoleAssignmentId().toString()).execute();
 				}
 			}
 		}
 	}
 
-	protected ExtensibleObject findGoogleUser (String account, ExtensibleObjectMapping mapping) throws InternalErrorException
-	{
+	protected ExtensibleObject findGoogleUser(String account, ExtensibleObjectMapping mapping)
+			throws InternalErrorException {
 
 		boolean active;
 
@@ -357,15 +331,14 @@ public class GoogleAppsAgent extends es.caib.seycon.ng.sync.agent.Agent
 			if (user != null) { // USUARI NOU
 //				log.info("l'usuari {} no existeix a google, el creem", account,
 //						null);
-				
-				ExtensibleObject obj = new ExtensibleObject ();
+
+				ExtensibleObject obj = new ExtensibleObject();
 				obj.setObjectType(mapping.getSystemObject());
-				for (String key: user.keySet())
-				{
-					copyAttribute (obj, user, key);
+				for (String key : user.keySet()) {
+					copyAttribute(obj, user, key);
 				}
 				return obj;
-			} else { 
+			} else {
 				return null;
 			}
 
@@ -379,29 +352,28 @@ public class GoogleAppsAgent extends es.caib.seycon.ng.sync.agent.Agent
 
 	}
 
-	protected ExtensibleObject findGoogleRole (String roleName, ExtensibleObjectMapping mapping) throws InternalErrorException
-	{
+	protected ExtensibleObject findGoogleRole(String roleName, ExtensibleObjectMapping mapping)
+			throws InternalErrorException {
 		fetchRoles();
 		boolean active;
 
 		try {
 			// Mirem si ja existeix l'usuari a google
 
-			Role role = rolesByName.get(roleName);
+			GenericJson role = rolesByName.get(roleName);
 
 			if (role != null) { // USUARI NOU
-				ExtensibleObject obj = new ExtensibleObject ();
+				ExtensibleObject obj = new ExtensibleObject();
 				obj.setObjectType(mapping.getSystemObject());
 				if (isDebug())
 					log.info("Parsing role");
-				for (String key: role.keySet())
-				{
-					if (isDebug()) 
-						log.info(">> "+key+": "+role.get(key));
-					copyAttribute (obj, role, key);
+				for (String key : role.keySet()) {
+					if (isDebug())
+						log.info(">> " + key + ": " + role.get(key));
+					copyAttribute(obj, role, key);
 				}
 				return obj;
-			} else { 
+			} else {
 				return null;
 			}
 		} catch (Exception e) {
@@ -412,132 +384,106 @@ public class GoogleAppsAgent extends es.caib.seycon.ng.sync.agent.Agent
 	}
 
 	private Object copyAttribute(Object src) {
-		if (src instanceof Map)
-		{
+		if (src instanceof Map) {
 			HashMap<String, Object> t = new HashMap<String, Object>();
-			Map<String,Object> srcMap = (Map<String,Object>) src;
-			for (String key2: srcMap.keySet())
-			{
+			Map<String, Object> srcMap = (Map<String, Object>) src;
+			for (String key2 : srcMap.keySet()) {
 				copyAttribute(t, srcMap, key2);
 			}
 			return t;
-		}
-		else if (src instanceof Collection)
-		{
+		} else if (src instanceof Collection) {
 			LinkedList<Object> t = new LinkedList<Object>();
 			Collection<Object> srcMap = (Collection<Object>) src;
-			for (Object o: srcMap)
-			{
-				t.add( copyAttribute ( o ) );
+			for (Object o : srcMap) {
+				t.add(copyAttribute(o));
 			}
 			return t;
-		}
-		else if (src instanceof DateTime)
-		{
-			return new Date ( ((DateTime) src).getValue() );
-		}
-		else
-		{
+		} else if (src instanceof DateTime) {
+			return new Date(((DateTime) src).getValue());
+		} else {
 			return src;
 		}
-		
+
 	}
 
-	private void copyAttribute(Map<String,Object> target, Map<String,Object> source, String key) {
+	private void copyAttribute(Map<String, Object> target, Map<String, Object> source, String key) {
 		Object src = source.get(key);
-		
-		if (src instanceof Map)
-		{
-			Map<String,Object> t = (Map<String, Object>) target.get(key);
-			if (t == null)
-			{
+
+		if (src instanceof Map) {
+			Map<String, Object> t = (Map<String, Object>) target.get(key);
+			if (t == null) {
 				t = new HashMap<String, Object>();
 				target.put(key, t);
 			}
-			Map<String,Object> srcMap = (Map<String,Object>) src;
-			for (String key2: srcMap.keySet())
-			{
+			Map<String, Object> srcMap = (Map<String, Object>) src;
+			for (String key2 : srcMap.keySet()) {
 				copyAttribute(t, srcMap, key2);
 			}
-		}
-		else if (src instanceof Collection)
-		{
+		} else if (src instanceof Collection) {
 			Collection<Object> t = (Collection<Object>) target.get(key);
-			if (t == null)
-			{
+			if (t == null) {
 				t = new LinkedList<Object>();
 				target.put(key, t);
 			}
 			Collection<Object> srcMap = (Collection<Object>) src;
-			for (Object o: srcMap)
-			{
-				t.add( copyAttribute ( o ) );
+			for (Object o : srcMap) {
+				t.add(copyAttribute(o));
 			}
-		}
-		else
-		{
-			target.put(key,  copyAttribute(src));
+		} else {
+			target.put(key, copyAttribute(src));
 		}
 	}
 
 	private String getOrgUnitPathString(String groupName, boolean create) throws InternalErrorException, IOException {
 		List<String> path = getOrgUnitPath(groupName, create);
 		StringBuffer sb = new StringBuffer();
-		for (String p: path)
-			sb.append ('/').append(p);
-		
+		for (String p : path)
+			sb.append('/').append(p);
+
 		return sb.toString();
 	}
 
-	private List<String> getOrgUnitPath(String codiGrupPrimari, boolean create) throws InternalErrorException, IOException {
+	private List<String> getOrgUnitPath(String codiGrupPrimari, boolean create)
+			throws InternalErrorException, IOException {
 		try {
 			Grup gi = getServer().getGroupInfo(codiGrupPrimari, getCodi());
-			List<String> path ;
-			if (gi .getCodiPare() != null)
+			List<String> path;
+			if (gi.getCodiPare() != null)
 				path = getOrgUnitPath(gi.getCodiPare(), create);
 			else
 				path = new LinkedList<String>();
 
-			
 			ExtensibleObject sourceObject = new GroupExtensibleObject(gi, getCodi(), getServer());
-			for (ExtensibleObjectMapping mapping: objectMappings)
-			{
-				if (mapping.getSoffidObject().equals (SoffidObjectType.OBJECT_GROUP) )
-				{
-					if (objectTranslator.evalCondition(sourceObject, mapping))
-					{
-		    			ExtensibleObject obj = objectTranslator.generateObject(sourceObject, mapping);
-		    			if (obj != null)
-		    			{
-		    				String name = (String) obj.getAttribute("name");
-		    				if (name != null)
-		    				{
-		    					path.add(name);
-		    					try {
-			    					OrgUnit orgunit = getDirectory().orgunits().get(customerId, path).execute();
-			    					if (orgunit == null && create)
-			    					{
-		    							updateGroup (path, obj);
-			    					}
-		    					} catch (GoogleJsonResponseException e) {
-		    						if (e.getStatusCode() == HttpServletResponse.SC_NOT_FOUND)
-		    						{
-				    					if (create)
-				    					{
-			    							updateGroup (path, obj);
-				    					}
-		    						} else {
-		    							throw new InternalErrorException("Error looking for group "+path, e);
-		    						}
-		    					}
-		    				}
-		    			}
+			for (ExtensibleObjectMapping mapping : objectMappings) {
+				if (mapping.getSoffidObject().equals(SoffidObjectType.OBJECT_GROUP)) {
+					if (objectTranslator.evalCondition(sourceObject, mapping)) {
+						ExtensibleObject obj = objectTranslator.generateObject(sourceObject, mapping);
+						if (obj != null) {
+							String name = (String) obj.getAttribute("name");
+							if (name != null) {
+								path.add(name);
+								try {
+									OrgUnit orgunit = getDirectory().orgunits().get(customerId, path).execute();
+									if (orgunit == null && create) {
+										updateGroup(path, obj);
+									}
+								} catch (GoogleJsonResponseException e) {
+									if (e.getStatusCode() == HttpServletResponse.SC_NOT_FOUND) {
+										if (create) {
+											updateGroup(path, obj);
+										}
+									} else {
+										throw new InternalErrorException("Error looking for group " + path, e);
+									}
+								}
+							}
+						}
 					}
 				}
 			}
-			
+
 			return path;
-			
+
 		} catch (UnknownGroupException e) {
 			return new LinkedList<String>();
 		}
@@ -547,16 +493,15 @@ public class GoogleAppsAgent extends es.caib.seycon.ng.sync.agent.Agent
 		StringBuffer parentPath = new StringBuffer();
 		StringBuffer currentPath = new StringBuffer();
 		String pathTail = null;
-		for (Iterator<String> it= path.iterator(); it.hasNext();)
-		{
-			String p = it.next ();
+		for (Iterator<String> it = path.iterator(); it.hasNext();) {
+			String p = it.next();
 			currentPath.append('/').append(p);
 			if (it.hasNext())
 				parentPath.append('/').append(p);
 			else
 				pathTail = p;
 		}
-			
+
 		if (parentPath.length() == 0)
 			parentPath.append("/");
 		OrgUnit orgunit = null;
@@ -564,10 +509,9 @@ public class GoogleAppsAgent extends es.caib.seycon.ng.sync.agent.Agent
 			orgunit = getDirectory().orgunits().get(customerId, path).execute();
 		} catch (GoogleJsonResponseException e) {
 			if (e.getStatusCode() != HttpServletResponse.SC_NOT_FOUND)
-				throw new IOException("Error looking for group "+path, e);
+				throw new IOException("Error looking for group " + path, e);
 		}
-		if (orgunit == null)
-		{
+		if (orgunit == null) {
 			orgunit = new OrgUnit();
 			orgunit.setDescription((String) obj.getAttribute("description"));
 			orgunit.setName((String) obj.getAttribute("name"));
@@ -585,42 +529,32 @@ public class GoogleAppsAgent extends es.caib.seycon.ng.sync.agent.Agent
 	public void updateGroup(String name, Grup gi) throws InternalErrorException {
 		ExtensibleObject sourceObject = new GroupExtensibleObject(gi, getCodi(), getServer());
 		try {
-			for (ExtensibleObjectMapping mapping: objectMappings)
-			{
-				if (mapping.getSoffidObject().equals (SoffidObjectType.OBJECT_GROUP) )
-				{
-					if (objectTranslator.evalCondition(sourceObject, mapping))
-					{
-		    			ExtensibleObject obj = objectTranslator.generateObject(sourceObject, mapping);
-		    			if (obj != null)
-		    				updateGroup (getOrgUnitPath(gi.getCodi(), true), obj);
-					}
-					else
-					{
-						List<String> path = getOrgUnitPath(gi.getCodi(),false);
-						OrgUnit ou = getDirectory().orgunits()
-							.get(customerId, path)
-							.execute();
+			for (ExtensibleObjectMapping mapping : objectMappings) {
+				if (mapping.getSoffidObject().equals(SoffidObjectType.OBJECT_GROUP)) {
+					if (objectTranslator.evalCondition(sourceObject, mapping)) {
+						ExtensibleObject obj = objectTranslator.generateObject(sourceObject, mapping);
+						if (obj != null)
+							updateGroup(getOrgUnitPath(gi.getCodi(), true), obj);
+					} else {
+						List<String> path = getOrgUnitPath(gi.getCodi(), false);
+						OrgUnit ou = getDirectory().orgunits().get(customerId, path).execute();
 						if (ou != null)
 							getDirectory().orgunits().delete(customerId, path);
 					}
 				}
 			}
-		}
-		catch (InternalErrorException e)
-		{
+		} catch (InternalErrorException e) {
 			throw e;
 		} catch (Exception e) {
 			throw new InternalErrorException(e.getMessage(), e);
 		}
 	}
 
-	public void removeUser(String account) throws InternalErrorException,
-			InternalErrorException {
+	public void removeUser(String account) throws InternalErrorException, InternalErrorException {
 		try {
 			disableUser(account);
 		} catch (IOException e) {
-			throw new InternalErrorException("Error disabling user "+account, e);
+			throw new InternalErrorException("Error disabling user " + account, e);
 		}
 	}
 
@@ -628,73 +562,64 @@ public class GoogleAppsAgent extends es.caib.seycon.ng.sync.agent.Agent
 		String[] split = account.split("@");
 		String accountName = split[0];
 		String accountDomain = split.length > 1 ? split[1] : googleDomain;
-		
-		User u = getDirectory().users().get(accountName+"@"+accountDomain).execute();
-		if (u != null)
-		{
+
+		User u = getDirectory().users().get(accountName + "@" + accountDomain).execute();
+		if (u != null) {
 			u.setSuspended(true);
-			getDirectory().users().update(accountName+"@"+accountDomain, u)
-				.execute();
+			getDirectory().users().update(accountName + "@" + accountDomain, u).execute();
 		}
-			
+
 	}
 
-	public void updateUserPassword(String account, Password password,
-			boolean mustchange) throws RemoteException, InternalErrorException {
+	public void updateUserPassword(String account, Password password, boolean mustchange)
+			throws RemoteException, InternalErrorException {
 		String[] split = account.split("@");
 		String accountName = split[0];
 		String accountDomain = split.length > 1 ? split[1] : googleDomain;
-		
+
 		try {
-			User u = getDirectory().users().get(accountName+"@"+accountDomain).execute();
-			if (u != null)
-			{
+			User u = getDirectory().users().get(accountName + "@" + accountDomain).execute();
+			if (u != null) {
 				User u2 = new User();
 				u2.setId(u.getId());
 				u2.setHashFunction("SHA-1");
 				u2.setPrimaryEmail(u.getPrimaryEmail());
 				String encodedPassword = encodePassword(password);
-				u2.setPassword( encodedPassword);
+				u2.setPassword(encodedPassword);
 				u2.setChangePasswordAtNextLogin(mustchange);
-				
-				getDirectory().users().patch(accountName+"@"+accountDomain, u2)
-					.execute();
+
+				getDirectory().users().patch(accountName + "@" + accountDomain, u2).execute();
 			}
 		} catch (NoSuchAlgorithmException e) {
-			throw new InternalErrorException("Error updating password for "+account, e);
+			throw new InternalErrorException("Error updating password for " + account, e);
 		} catch (UnsupportedEncodingException e) {
-			throw new InternalErrorException("Error updating password for "+account, e);
+			throw new InternalErrorException("Error updating password for " + account, e);
 		} catch (IOException e) {
-			throw new InternalErrorException("Error updating password for "+account, e);
+			throw new InternalErrorException("Error updating password for " + account, e);
 		}
 	}
 
-	private String encodePassword(Password password)
-			throws NoSuchAlgorithmException, UnsupportedEncodingException {
+	private String encodePassword(Password password) throws NoSuchAlgorithmException, UnsupportedEncodingException {
 		byte[] hash = MessageDigest.getInstance("SHA-1").digest(password.getPassword().getBytes("UTF-8"));
-		String encodedPassword = base16 (hash);
+		String encodedPassword = base16(hash);
 		return encodedPassword;
 	}
 
 	/**
 	 * Retrieves a user.
 	 * 
-	 * @param user
-	 *            The user you wish to retrieve.
+	 * @param user The user you wish to retrieve.
 	 * @return A UserEntry object of the retrieved user.
-	 * @throws AppsForYourDomainException
-	 *             If a Provisioning API specific occurs.
-	 * @throws ServiceException
-	 *             If a generic GData framework error occurs.
-	 * @throws IOException
-	 *             If an error occurs communicating with the GData service.
+	 * @throws AppsForYourDomainException If a Provisioning API specific occurs.
+	 * @throws ServiceException           If a generic GData framework error occurs.
+	 * @throws IOException                If an error occurs communicating with the
+	 *                                    GData service.
 	 */
-	private User retrieveUser(String user, String domini)
-			throws InternalErrorException {
+	private User retrieveUser(String user, String domini) throws InternalErrorException {
 
 		log.info("Retrieving user '{}'.", user, null);
 		try {
-			Get get = getDirectory().users().get(user+"@"+domini);
+			Get get = getDirectory().users().get(user + "@" + domini);
 			try {
 				return get.execute();
 			} catch (GoogleJsonResponseException e) {
@@ -709,7 +634,7 @@ public class GoogleAppsAgent extends es.caib.seycon.ng.sync.agent.Agent
 	}
 
 	private String base16(byte[] hash) throws UnsupportedEncodingException {
-		return new String (Hex.encode(hash), "UTF-8");
+		return new String(Hex.encode(hash), "UTF-8");
 	}
 
 	public void configureMappings(Collection<ExtensibleObjectMapping> objects)
@@ -717,69 +642,48 @@ public class GoogleAppsAgent extends es.caib.seycon.ng.sync.agent.Agent
 		objectMappings = objects;
 		objectTranslator = new ObjectTranslator(getDispatcher(), getServer(), objects);
 		if (hasRoleMapping()) {
-			String[] perms = new String [] {
-						DirectoryScopes.ADMIN_DIRECTORY_USER,
-						DirectoryScopes.ADMIN_DIRECTORY_ORGUNIT,
-						DirectoryScopes.ADMIN_DIRECTORY_GROUP,
-						DirectoryScopes.ADMIN_DIRECTORY_GROUP_MEMBER,
-						DirectoryScopes.ADMIN_DIRECTORY_ROLEMANAGEMENT
-				};
-			googleCredential = new GoogleCredential.Builder()
-			.setTransport(httpTransport)
-			.setJsonFactory(jsonFactory)
-			.setServiceAccountId(accountId)
-			.setServiceAccountScopes(Arrays.asList( perms ))
-			.setServiceAccountPrivateKey(privateKey)
-			.setServiceAccountUser(adminUser)
-			.build();
+			String[] perms = new String[] { DirectoryScopes.ADMIN_DIRECTORY_USER,
+					DirectoryScopes.ADMIN_DIRECTORY_ORGUNIT, DirectoryScopes.ADMIN_DIRECTORY_GROUP,
+					DirectoryScopes.ADMIN_DIRECTORY_GROUP_MEMBER, DirectoryScopes.ADMIN_DIRECTORY_ROLEMANAGEMENT };
+			googleCredential = new GoogleCredential.Builder().setTransport(httpTransport).setJsonFactory(jsonFactory)
+					.setServiceAccountId(accountId).setServiceAccountScopes(Arrays.asList(perms))
+					.setServiceAccountPrivateKey(privateKey).setServiceAccountUser(adminUser).build();
 		}
 	}
 
-	public void updateUserAlias(String useKey, Usuari user)
-			throws InternalErrorException {
-		
+	public void updateUserAlias(String useKey, Usuari user) throws InternalErrorException {
+
 	}
 
 	public void removeUserAlias(String userKey) throws InternalErrorException {
-		
+
 	}
 
-	public void updateUser(String accountName, String description)
-			throws RemoteException, InternalErrorException {
+	public void updateUser(String accountName, String description) throws RemoteException, InternalErrorException {
 		Account acc = getServer().getAccountInfo(accountName, getCodi());
-		if (acc.getType() == AccountType.USER)
-		{
+		if (acc.getType() == AccountType.USER) {
 			Usuari u;
 			try {
 				u = getServer().getUserInfo(accountName, getCodi());
 			} catch (UnknownUserException e) {
-				throw new InternalErrorException("Error getting user information",e);
+				throw new InternalErrorException("Error getting user information", e);
 			}
 			updateUser(accountName, u);
-		}
-		else
-		{
+		} else {
 			ExtensibleObject sourceObject = new AccountExtensibleObject(acc, getServer());
 			try {
-				for (ExtensibleObjectMapping mapping: objectMappings)
-				{
-					if (mapping.getSoffidObject().equals (SoffidObjectType.OBJECT_ACCOUNT) )
-					{
-						if (objectTranslator.evalCondition(sourceObject, mapping))
-						{
-			    			ExtensibleObject obj = objectTranslator.generateObject(sourceObject, mapping);
-			    			if (obj != null)
-			    				updateGoogleUser(accountName, acc, null, obj);
-						}
-						else
-						{
+				for (ExtensibleObjectMapping mapping : objectMappings) {
+					if (mapping.getSoffidObject().equals(SoffidObjectType.OBJECT_ACCOUNT)) {
+						if (objectTranslator.evalCondition(sourceObject, mapping)) {
+							ExtensibleObject obj = objectTranslator.generateObject(sourceObject, mapping);
+							if (obj != null)
+								updateGoogleUser(accountName, acc, null, obj);
+						} else {
 							disableUser(acc.getName());
 						}
 					}
 				}
-			}
-			catch (InternalErrorException e)
-			{
+			} catch (InternalErrorException e) {
 				throw e;
 			} catch (Exception e) {
 				throw new InternalErrorException(e.getMessage(), e);
@@ -787,11 +691,10 @@ public class GoogleAppsAgent extends es.caib.seycon.ng.sync.agent.Agent
 		}
 	}
 
-	public void updateUserPassword(String userName, Usuari userData,
-			Password password, boolean mustchange) throws RemoteException,
-			InternalErrorException {
+	public void updateUserPassword(String userName, Usuari userData, Password password, boolean mustchange)
+			throws RemoteException, InternalErrorException {
 		updateUserPassword(userName, password, mustchange);
-		
+
 	}
 
 	public boolean validateUserPassword(String userName, Password password)
@@ -799,18 +702,15 @@ public class GoogleAppsAgent extends es.caib.seycon.ng.sync.agent.Agent
 		return false;
 	}
 
-	public void removeGroup(String groupName) throws RemoteException,
-			InternalErrorException {
+	public void removeGroup(String groupName) throws RemoteException, InternalErrorException {
 		// Nothing to do on this version
 	}
 
-	public void updateListAlias(LlistaCorreu llista)
-			throws InternalErrorException {
+	public void updateListAlias(LlistaCorreu llista) throws InternalErrorException {
 		try {
-			if (! llista.getCodiDomini().equals (googleDomain) &&
-					! llista.getCodiDomini().endsWith("."+googleDomain))
+			if (!llista.getCodiDomini().equals(googleDomain) && !llista.getCodiDomini().endsWith("." + googleDomain))
 				return;
-			
+
 			String name = llista.getNom() + "@" + llista.getCodiDomini();
 			if (llista.getLlistaLlistes() == null)
 				llista.setLlistaLlistes(new LinkedList<String>());
@@ -819,66 +719,53 @@ public class GoogleAppsAgent extends es.caib.seycon.ng.sync.agent.Agent
 			List<String> users = llista.getExplodedUsersList();
 			if (users == null)
 				users = new LinkedList<String>();
-			if (llista.getLlistaExterns().size() == 0 &&
-					llista.getLlistaLlistes().size() == 0 &&
-					users.size() == 0 )
-			{
+			if ((llista.getLlistaExterns() == null || llista.getLlistaExterns().size() == 0)
+					&& llista.getLlistaLlistes().size() == 0 && users.size() == 0) {
 				removeListAlias(llista.getNom(), llista.getCodiDomini());
 				String aliasOwner = getAliasOwner(name);
-				if (aliasOwner != null)
-				{
+				if (aliasOwner != null) {
 					removeAlias(name, aliasOwner);
 				}
 				return;
 			}
 			Group g = null;
-			try
-			{
-				g = getDirectory().groups().get(llista.getNom()+"@"+llista.getCodiDomini()).execute();
+			try {
+				g = getDirectory().groups().get(llista.getNom() + "@" + llista.getCodiDomini()).execute();
 			} catch (GoogleJsonResponseException e) {
 				if (e.getStatusCode() != HttpServletResponse.SC_NOT_FOUND)
 					throw e;
 			}
-			
+
 			if (g == null) {
-				boolean singleUser = llista.getLlistaExterns().isEmpty() && 
-						llista.getLlistaLlistes().isEmpty() &&
-						users.size() == 1;
-				String owner = singleUser ? getUserEmail (users.get(0)): null;
-				
+				boolean singleUser = llista.getLlistaExterns().isEmpty() && llista.getLlistaLlistes().isEmpty()
+						&& users.size() == 1;
+				String owner = singleUser ? getUserEmail(users.get(0)) : null;
+
 				String aliasOwner = getAliasOwner(name);
-				if (singleUser)
-				{
-					if (owner != null &&  owner.equals(aliasOwner) )
-					{
+				if (singleUser) {
+					if (owner != null && owner.equals(aliasOwner)) {
 						// Nothing to do
 						return;
 					}
-					
-					if (aliasOwner != null)
-					{
+
+					if (aliasOwner != null) {
 						removeAlias(name, aliasOwner);
 					}
-					
-					if (owner != null && ! owner.equals (name))
-					{
+
+					if (owner != null && !owner.equals(name)) {
 						User u = getDirectory().users().get(owner).execute();
-						Alias alias = new Alias ();
+						Alias alias = new Alias();
 						alias.setAlias(name);
 						alias.setPrimaryEmail(u.getPrimaryEmail());
 						getDirectory().users().aliases().insert(u.getId(), alias).execute();
 						return;
-					}
-					else
-					{
+					} else {
 						// Now create a normal list
 					}
-				}
-				else if (aliasOwner != null)
-				{
+				} else if (aliasOwner != null) {
 					removeAlias(name, aliasOwner);
 				}
-				g = new Group ();
+				g = new Group();
 				g.setAdminCreated(true);
 				g.setDescription(llista.getDescripcio());
 				g.setName(llista.getNom());
@@ -894,68 +781,54 @@ public class GoogleAppsAgent extends es.caib.seycon.ng.sync.agent.Agent
 
 	private void removeAlias(String name, String aliasOwner) throws IOException {
 		User u = getDirectory().users().get(aliasOwner).execute();
-		
+
 		getDirectory().users().aliases().delete(u.getId(), name).execute();
-		
-		if (u.getEmails() != null && u.getEmails() instanceof Collection)
-		{
+
+		if (u.getEmails() != null && u.getEmails() instanceof Collection) {
 			Iterator<UserEmail> it = ((Collection<UserEmail>) u.getEmails()).iterator();
-			while (it.hasNext())
-			{
-				Map<String,Object> ue = it.next();
-				if (ue.get("address") != null &&
-						name.equalsIgnoreCase(ue.get("address").toString()))
+			while (it.hasNext()) {
+				Map<String, Object> ue = it.next();
+				if (ue.get("address") != null && name.equalsIgnoreCase(ue.get("address").toString()))
 					it.remove();
 			}
 		}
-		
+
 		getDirectory().users().update(u.getId(), u).execute();
 	}
 
-	String getUserEmail (String user) throws InternalErrorException, es.caib.seycon.ng.exception.UnknownUserException
-	{
+	String getUserEmail(String user) throws InternalErrorException, es.caib.seycon.ng.exception.UnknownUserException {
 		Usuari u = getServer().getUserInfo(user, null);
-		for (Account acc : getServer().getUserAccounts(u.getId(),
-				getCodi()))
-		{
-			if (! acc.isDisabled())
+		for (Account acc : getServer().getUserAccounts(u.getId(), getCodi())) {
+			if (!acc.isDisabled())
 				return acc.getName();
 		}
-		
+
 		if (u.getDominiCorreu() != null)
-			return u.getNomCurt()+"@"+u.getDominiCorreu();
-		else
-		{
+			return u.getNomCurt() + "@" + u.getDominiCorreu();
+		else {
 			DadaUsuari email = getServer().getUserData(u.getId(), "EMAIL");
 			if (email != null && email.getValorDada() != null)
 				return email.getValorDada();
-				
+
 		}
 		return null;
 	}
-	
+
 	private String getAliasOwner(String email) throws IOException {
-		Users users = getDirectory().users().list()
-				.setDomain(googleDomain)
-				.setQuery("email:"+email).execute();
-		if (users.getUsers() != null && users.getUsers().size() > 0)
-		{
+		Users users = getDirectory().users().list().setDomain(googleDomain).setQuery("email:" + email).execute();
+		if (users.getUsers() != null && users.getUsers().size() > 0) {
 			return users.getUsers().get(0).getPrimaryEmail();
-		}
-		else
+		} else
 			return null;
 	}
 
-	private void setListAliasMembers(String name, LlistaCorreu llista, List<String> users, Group g)
-			throws IOException, TimedOutException, InternalErrorException,
-			es.caib.seycon.ng.exception.UnknownUserException {
+	private void setListAliasMembers(String name, LlistaCorreu llista, List<String> users, Group g) throws IOException,
+			TimedOutException, InternalErrorException, es.caib.seycon.ng.exception.UnknownUserException {
 		Members members = getDirectory().members().list(g.getId()).execute();
 
 		Set<String> current = new HashSet<String>();
-		if (members.getMembers() != null)
-		{
-			for (Member member: members.getMembers())
-			{
+		if (members.getMembers() != null) {
+			for (Member member : members.getMembers()) {
 				current.add(member.getEmail());
 			}
 		}
@@ -970,22 +843,19 @@ public class GoogleAppsAgent extends es.caib.seycon.ng.sync.agent.Agent
 			Usuari u = getServer().getUserInfo(user, null);
 			if (u != null) {
 				boolean found = false;
-			
-				for (Account acc : getServer().getUserAccounts(u.getId(),
-						getCodi())) {
+
+				for (Account acc : getServer().getUserAccounts(u.getId(), getCodi())) {
 					newMembers.add(acc.getName().toLowerCase());
 					found = true;
 				}
-				if (! found )
-				{
+				if (!found) {
 					if (u.getDominiCorreu() != null)
-						newMembers.add (u.getNomCurt()+"@"+u.getDominiCorreu().toLowerCase());
-					else
-					{
+						newMembers.add(u.getNomCurt() + "@" + u.getDominiCorreu().toLowerCase());
+					else {
 						DadaUsuari email = getServer().getUserData(u.getId(), "EMAIL");
 						if (email != null && email.getValorDada() != null)
-							newMembers.add (email.getValorDada().toLowerCase());
-							
+							newMembers.add(email.getValorDada().toLowerCase());
+
 					}
 				}
 			}
@@ -1006,20 +876,17 @@ public class GoogleAppsAgent extends es.caib.seycon.ng.sync.agent.Agent
 		// Removes old members
 		for (String oldMember : current) {
 			Member m = getDirectory().members().get(g.getId(), oldMember).execute();
-			if (m !=  null)
+			if (m != null)
 				getDirectory().members().delete(g.getId(), m.getId()).execute();
 		}
 	}
 
-
-	public void removeListAlias(String list, String domain)
-			throws InternalErrorException {
-		if (! domain.equals(domain) && 
-				!domain.endsWith("."+googleDomain))
+	public void removeListAlias(String list, String domain) throws InternalErrorException {
+		if (!domain.equals(domain) && !domain.endsWith("." + googleDomain))
 			return;
 
 		try {
-			Group g = getDirectory().groups().get(list+"@"+domain).execute();
+			Group g = getDirectory().groups().get(list + "@" + domain).execute();
 			if (g != null)
 				getDirectory().groups().delete(g.getId()).execute();
 		} catch (GoogleJsonResponseException e) {
@@ -1030,51 +897,45 @@ public class GoogleAppsAgent extends es.caib.seycon.ng.sync.agent.Agent
 		}
 	}
 
-	public void removeRole(String role, String system) throws RemoteException,
-			InternalErrorException {
-		if (system.equals(getCodi()))
-		{
+	public void removeRole(String role, String system) throws RemoteException, InternalErrorException {
+		if (system.equals(getCodi())) {
 			String[] split = role.split("@");
 			String roleName = split[0];
 			String roleDomain = split.length > 1 ? split[1] : googleDomain;
-	
-			String name = roleName+"@"+roleDomain;
+
+			String name = roleName + "@" + roleDomain;
 			Group g = null;
-			try
-			{
+			try {
 				g = getDirectory().groups().get(name).execute();
 				getDirectory().groups().delete(g.getId()).execute();
 			} catch (GoogleJsonResponseException e) {
 				if (e.getStatusCode() != HttpServletResponse.SC_NOT_FOUND)
-					throw new InternalErrorException("Error locating group "+name, e);
+					throw new InternalErrorException("Error locating group " + name, e);
 			} catch (IOException e) {
-				throw new InternalErrorException("Error locating group "+name, e);
+				throw new InternalErrorException("Error locating group " + name, e);
 			}
 		}
-		
+
 	}
 
-	public void updateRole(Rol role) throws RemoteException,
-			InternalErrorException {
+	public void updateRole(Rol role) throws RemoteException, InternalErrorException {
 		try {
-			if (role.getBaseDeDades().equals(getCodi()))
-			{
+			if (role.getBaseDeDades().equals(getCodi())) {
 				String[] split = role.getNom().split("@");
 				String roleName = split[0];
 				String roleDomain = split.length > 1 ? split[1] : googleDomain;
-	
-				String name = roleName+"@"+roleDomain;
+
+				String name = roleName + "@" + roleDomain;
 				Group g = null;
-				try
-				{
+				try {
 					g = getDirectory().groups().get(name).execute();
 				} catch (GoogleJsonResponseException e) {
 					if (e.getStatusCode() != HttpServletResponse.SC_NOT_FOUND)
 						throw e;
 				}
-				
+
 				if (g == null) {
-					g = new Group ();
+					g = new Group();
 					g.setAdminCreated(true);
 					g.setDescription(role.getDescripcio());
 					g.setName(roleName);
@@ -1087,26 +948,24 @@ public class GoogleAppsAgent extends es.caib.seycon.ng.sync.agent.Agent
 			e.printStackTrace();
 			throw new InternalErrorException("Error processing task", e);
 		}
-		
+
 	}
 
-	private void setRoleMembers(String name, Group g, Rol role) throws InternalErrorException, UnknownRoleException, IOException {
+	private void setRoleMembers(String name, Group g, Rol role)
+			throws InternalErrorException, UnknownRoleException, IOException {
 		Members members = getDirectory().members().list(g.getId()).execute();
 
 		Set<String> current = new HashSet<String>();
-		if (members.getMembers() != null)
-		{
-			for (Member member: members.getMembers())
-			{
+		if (members.getMembers() != null) {
+			for (Member member : members.getMembers()) {
 				current.add(member.getEmail());
 			}
 		}
 
 		Set<String> newMembers = new HashSet<String>();
-		for (Account acc: getServer().getRoleActiveAccounts(role.getId(), getCodi()))
-		{
+		for (Account acc : getServer().getRoleActiveAccounts(role.getId(), getCodi())) {
 			String accountName = acc.getName();
-			if (! accountName.contains("@"))
+			if (!accountName.contains("@"))
 				accountName = accountName + "@" + googleDomain;
 			newMembers.add(accountName);
 		}
@@ -1126,7 +985,7 @@ public class GoogleAppsAgent extends es.caib.seycon.ng.sync.agent.Agent
 		// Removes old members
 		for (String oldMember : current) {
 			Member m = getDirectory().members().get(g.getId(), oldMember).execute();
-			if (m !=  null)
+			if (m != null)
 				getDirectory().members().delete(g.getId(), m.getId()).execute();
 		}
 	}
@@ -1134,26 +993,22 @@ public class GoogleAppsAgent extends es.caib.seycon.ng.sync.agent.Agent
 	public List<RolGrant> getAccountGrants(String account) throws RemoteException, InternalErrorException {
 		List<RolGrant> grants = new LinkedList<RolGrant>();
 		try {
-			for (ExtensibleObjectMapping mapping: objectMappings)
-			{
-				if (mapping.getSoffidObject().equals (SoffidObjectType.OBJECT_ROLE) )
-				{
+			for (ExtensibleObjectMapping mapping : objectMappings) {
+				if (mapping.getSoffidObject().equals(SoffidObjectType.OBJECT_ROLE)) {
 					fetchRoles();
-					Map<String,RoleAssignment> existing = new HashMap<String,RoleAssignment>();
-					
+					Map<String, RoleAssignment> existing = new HashMap<String, RoleAssignment>();
+
 					RoleAssignments assignments = null;
 					do {
-						assignments = getDirectory().roleAssignments()
-									.list(customerId)
-									.setPageToken(assignments == null ? null: assignments.getNextPageToken())
-									.setUserKey(account)
-									.execute();
+						assignments = getDirectory().roleAssignments().list(customerId)
+								.setPageToken(assignments == null ? null : assignments.getNextPageToken())
+								.setUserKey(account).execute();
 						if (assignments.getItems() != null) {
-							for (RoleAssignment ass: assignments.getItems()) {
+							for (RoleAssignment ass : assignments.getItems()) {
 								Long roleId = ass.getRoleId();
 								Role r = rolesById.get(roleId);
 								if (r == null)
-									throw new InternalErrorException("Unknown role id "+roleId);
+									throw new InternalErrorException("Unknown role id " + roleId);
 								RolGrant rg = new RolGrant();
 								rg.setOwnerAccountName(account);
 								rg.setOwnerDispatcher(getDispatcher().getCodi());
@@ -1173,25 +1028,19 @@ public class GoogleAppsAgent extends es.caib.seycon.ng.sync.agent.Agent
 
 	public Account getAccountInfo(String account) throws RemoteException, InternalErrorException {
 		try {
-			for (ExtensibleObjectMapping mapping: objectMappings)
-			{
-				if (mapping.getSoffidObject().equals (SoffidObjectType.OBJECT_ACCOUNT) )
-				{
+			for (ExtensibleObjectMapping mapping : objectMappings) {
+				if (mapping.getSoffidObject().equals(SoffidObjectType.OBJECT_ACCOUNT)) {
 					ExtensibleObject obj = findGoogleUser(account, mapping);
-					if (obj != null)
-					{
+					if (obj != null) {
 						ExtensibleObject src = objectTranslator.parseInputObject(obj, mapping);
-		    			if (obj != null)
-		    			{
-		    				return new ValueObjectMapper().parseAccount(src);
-		    			}
+						if (obj != null) {
+							return new ValueObjectMapper().parseAccount(src);
+						}
 					}
 				}
 			}
 			return null;
-		}
-		catch (InternalErrorException e)
-		{
+		} catch (InternalErrorException e) {
 			throw e;
 		} catch (Exception e) {
 			throw new InternalErrorException(e.getMessage(), e);
@@ -1199,49 +1048,53 @@ public class GoogleAppsAgent extends es.caib.seycon.ng.sync.agent.Agent
 	}
 
 	public List<String> getAccountsList() throws RemoteException, InternalErrorException {
-		LinkedList<String> r  = new LinkedList<String>();
-		
+		LinkedList<String> r = new LinkedList<String>();
+
 		Users users = null;
-		do {
-			try {
-				users = getDirectory().users().list()
-							.setCustomer(customerId)
-							.setFields("users/primaryEmail")
-							.setPageToken(users == null ? null: users.getNextPageToken())
-							.execute();
-			} catch (IOException e) {
-				throw new InternalErrorException("Error invoking google apps" ,e);
-			}
-		
-			for ( User user: users.getUsers())
-			{
-				r.add(user.getPrimaryEmail());
-			}
-		} while (users.getNextPageToken() != null);
+		try {
+			do {
+				users = getDirectory().users().list().setCustomer(customerId)
+						.setFields("users/primaryEmail,nextPageToken").setMaxResults(50)
+						.setPageToken(users == null ? null : users.getNextPageToken()).execute();
+
+				for (User user : users.getUsers()) {
+					r.add(user.getPrimaryEmail());
+				}
+
+			} while (users.getNextPageToken() != null);
+
+		} catch (IOException e) {
+			throw new InternalErrorException("Error invoking google apps", e);
+		}
+
 		return r;
 	}
 
 	public Rol getRoleFullInfo(String roleName) throws RemoteException, InternalErrorException {
 		try {
-			for (ExtensibleObjectMapping mapping: objectMappings)
-			{
-				if (mapping.getSoffidObject().equals (SoffidObjectType.OBJECT_ROLE) )
-				{
+
+			com.google.api.services.iam.v1.model.Role r = iamRolesByName.get(roleName);
+			if (r != null) {
+				Rol role = new Rol();
+				role.setNom(r.getName());
+				role.setDescripcio(r.getDescription());
+				role.setDomini("Projects");
+				return role;
+			}
+
+			for (ExtensibleObjectMapping mapping : objectMappings) {
+				if (mapping.getSoffidObject().equals(SoffidObjectType.OBJECT_ROLE)) {
 					ExtensibleObject obj = findGoogleRole(roleName, mapping);
-					if (obj != null)
-					{
+					if (obj != null) {
 						ExtensibleObject src = objectTranslator.parseInputObject(obj, mapping);
-		    			if (obj != null)
-		    			{
-		    				return new ValueObjectMapper().parseRol(src);
-		    			}
+						if (obj != null) {
+							return new ValueObjectMapper().parseRol(src);
+						}
 					}
 				}
 			}
 			return null;
-		}
-		catch (InternalErrorException e)
-		{
+		} catch (InternalErrorException e) {
 			throw e;
 		} catch (Exception e) {
 			throw new InternalErrorException(e.getMessage(), e);
@@ -1249,20 +1102,22 @@ public class GoogleAppsAgent extends es.caib.seycon.ng.sync.agent.Agent
 	}
 
 	public List<String> getRolesList() throws RemoteException, InternalErrorException {
-		if (hasRoleMapping())
+		if (hasRoleMapping()) {
 			fetchRoles();
-		return new LinkedList<String>( rolesByName.keySet());
+		}
+
+		// Fetch
+		LinkedList<String> l = new LinkedList<String>(rolesByName.keySet());
+		l.addAll(iamRolesByName.keySet());
+		return l;
 	}
 
 	public ExtensibleObject getNativeObject(SoffidObjectType type, String object1, String object2)
 			throws RemoteException, InternalErrorException {
-		for (ExtensibleObjectMapping mapping: objectMappings)
-		{
-			if (mapping.getSoffidObject().equals (type) )
-			{
+		for (ExtensibleObjectMapping mapping : objectMappings) {
+			if (mapping.getSoffidObject().equals(type)) {
 				ExtensibleObject obj = findGoogleUser(object1, mapping);
-				if (obj != null)
-				{
+				if (obj != null) {
 					return obj;
 				}
 			}
@@ -1272,18 +1127,14 @@ public class GoogleAppsAgent extends es.caib.seycon.ng.sync.agent.Agent
 
 	public ExtensibleObject getSoffidObject(SoffidObjectType type, String object1, String object2)
 			throws RemoteException, InternalErrorException {
-		for (ExtensibleObjectMapping mapping: objectMappings)
-		{
-			if (mapping.getSoffidObject().equals (type) )
-			{
+		for (ExtensibleObjectMapping mapping : objectMappings) {
+			if (mapping.getSoffidObject().equals(type)) {
 				ExtensibleObject obj = findGoogleUser(object1, mapping);
-				if (obj != null)
-				{
+				if (obj != null) {
 					ExtensibleObject src = objectTranslator.parseInputObject(obj, mapping);
-	    			if (src != null)
-	    			{
-	    				return src;
-	    			}
+					if (src != null) {
+						return src;
+					}
 				}
 			}
 		}
@@ -1291,34 +1142,47 @@ public class GoogleAppsAgent extends es.caib.seycon.ng.sync.agent.Agent
 	}
 
 	long lastUpdate = 0;
-	Map<String,Role> rolesByName = new HashMap<String, Role>();
-	Map<Long,Role> rolesById = new HashMap<Long, Role>();
+	Map<String, Role> rolesByName = new HashMap<String, Role>();
+	Map<Long, Role> rolesById = new HashMap<Long, Role>();
+	private Map<String, com.google.api.services.iam.v1.model.Role> iamRolesByName = new HashMap<>();
+
 	protected void fetchRoles() throws InternalErrorException {
 		if (lastUpdate < System.currentTimeMillis() - 1000 * 60 * 5) { // 5 minutes cache
 			rolesById.clear();
 			rolesByName.clear();
+			iamRolesByName.clear();
 			Roles roles = null;
 			do {
 				try {
 					roles = getDirectory().roles().list(customerId)
 //								.setFields("roles/roleName")
-								.setPageToken(roles == null ? null: roles.getNextPageToken())
-								.execute();
+							.setPageToken(roles == null ? null : roles.getNextPageToken()).execute();
 				} catch (IOException e) {
-					throw new InternalErrorException("Error invoking google apps" ,e);
+					throw new InternalErrorException("Error invoking google apps", e);
 				}
-			
+
 				if (roles.getItems() != null) {
-					for ( Role role: roles.getItems())
-					{
+					for (Role role : roles.getItems()) {
 						rolesByName.put(role.getRoleName(), role);
 						rolesById.put(role.getRoleId(), role);
 					}
 				}
 			} while (roles.getNextPageToken() != null);
+
 		}
 	}
-	
+
+	@Override
+	public List<HostService> getHostServices() throws RemoteException, InternalErrorException {
+		return null;
+	}
+
+	@Override
+	public void removeExtensibleObject(ExtensibleObject arg0) throws RemoteException, InternalErrorException {
+	}
+
+	@Override
+	public void updateExtensibleObject(ExtensibleObject arg0) throws RemoteException, InternalErrorException {
+	}
+
 }
-
-
