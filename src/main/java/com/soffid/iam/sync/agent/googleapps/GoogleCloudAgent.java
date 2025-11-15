@@ -67,6 +67,7 @@ import com.google.api.services.iam.v1.model.ServiceAccountKey;
 import com.google.api.services.iam.v1.model.SetIamPolicyRequest;
 import com.google.api.services.iam.v2.model.GoogleIamV2Policy;
 import com.google.api.services.iam.v2.model.GoogleIamV2PolicyRule;
+import com.soffid.iam.api.AccountStatus;
 import com.soffid.iam.api.Application;
 import com.soffid.iam.api.DataType;
 import com.soffid.iam.api.Domain;
@@ -194,6 +195,7 @@ public class GoogleCloudAgent extends es.caib.seycon.ng.sync.agent.Agent
 	}
 
 	public void updateUser(String account, Usuari user) throws RemoteException, InternalErrorException {
+		updateUser(account, user.getFullName());
 	}
 
 	protected void updateGoogleAccount(String account, Account acc, ExtensibleObject obj)
@@ -267,6 +269,8 @@ public class GoogleCloudAgent extends es.caib.seycon.ng.sync.agent.Agent
 		String keyMaterial = key.getPrivateKeyData();
 		account.getAttributes().put("key", keyMaterial.getBytes(StandardCharsets.UTF_8));
 		new es.caib.seycon.ng.remote.RemoteServiceLocator().getAccountService().updateAccount2(account);
+//		new es.caib.seycon.ng.remote.RemoteServiceLocator().getAccountService()
+//			.setAccountSshPrivateKey(account, keyMaterial);
 	}
 
 	private void updateAccountRoles(Account acc)
@@ -439,18 +443,25 @@ public class GoogleCloudAgent extends es.caib.seycon.ng.sync.agent.Agent
 				projects = getResourceManager().projects().list()
 						.setPageToken(projects == null ? null : projects.getNextPageToken()).execute();
 				for (Project project : projects.getProjects()) {
-					ListServiceAccountsResponse lsa = null;
-					do {
-						lsa = getIam().projects().serviceAccounts().list("projects/" + project.getProjectId())
-								.setPageToken(lsa == null ? null : lsa.getNextPageToken()).execute();
-						if (lsa.getAccounts() != null) {
-							for (ServiceAccount user : lsa.getAccounts()) {
-								if (user.getEmail().equals(account)) {
-									return user;
+					if ("ACTIVE".equals(project.getLifecycleState())) {
+						ListServiceAccountsResponse lsa = null;
+						try {
+							do {
+								lsa = getIam().projects().serviceAccounts().list("projects/" + project.getProjectId())
+										.setPageToken(lsa == null ? null : lsa.getNextPageToken()).execute();
+								if (lsa.getAccounts() != null) {
+									for (ServiceAccount user : lsa.getAccounts()) {
+										if (user.getEmail().equals(account)) {
+											return user;
+										}
+									}
 								}
-							}
+							} while (lsa.getNextPageToken() != null);
+						} catch (GoogleJsonResponseException e) {
+							if (e.getStatusCode() != 404) // Not Found
+								throw e;
 						}
-					} while (lsa.getNextPageToken() != null);
+					}
 				}
 			}
 			return null;
@@ -543,6 +554,9 @@ public class GoogleCloudAgent extends es.caib.seycon.ng.sync.agent.Agent
 			Collection<RolGrant> existings = getAccountGrants(account);
 			for (RolGrant existing: existings)
 				revoke(existing);
+			Account acc = getServer().getAccountInfo(account, getCodi());
+			if (acc == null || acc.getStatus() == AccountStatus.REMOVED)
+				removeGCPUser(account);
 		} catch (IOException e) {
 			throw new InternalErrorException("Error disabling user " + account, e);
 		}
@@ -553,10 +567,27 @@ public class GoogleCloudAgent extends es.caib.seycon.ng.sync.agent.Agent
 			ServiceAccount u = findServiceAccount(account);
 			if (u != null && ! Boolean.TRUE.equals(u.getDisabled())) {
 				DisableServiceAccountRequest esar = new DisableServiceAccountRequest();
+				log.info("Disabling "+u.getName());
 				getIam().projects().serviceAccounts()
-					.disable("projects/"+u.getProjectId()+"/serviceAccounts/"+u.getName(), 
+					.disable(u.getName(), 
 							esar).execute();
 			}
+		}
+	}
+
+	private void removeGCPUser(String account) throws IOException, InternalErrorException {
+		if (account.endsWith("gserviceaccount.com")) {
+			ServiceAccount u = findServiceAccount(account);
+			if (u != null && ! Boolean.TRUE.equals(u.getDisabled())) {
+				DisableServiceAccountRequest esar = new DisableServiceAccountRequest();
+				log.info("Disabling "+u.getName());
+				getIam().projects().serviceAccounts()
+						.disable(u.getName(), 
+							esar).execute();
+			}
+			if (u != null)
+				getIam().projects().serviceAccounts()
+					.delete(u.getName()).execute();
 		}
 	}
 
@@ -580,33 +611,30 @@ public class GoogleCloudAgent extends es.caib.seycon.ng.sync.agent.Agent
 
 	public void updateUser(String accountName, String description) throws RemoteException, InternalErrorException {
 		Account acc = getServer().getAccountInfo(accountName, getCodi());
-		if (acc.getType() == AccountType.USER) {
-			Usuari u;
-			try {
-				u = getServer().getUserInfo(accountName, getCodi());
-			} catch (UnknownUserException e) {
-				throw new InternalErrorException("Error getting user information", e);
-			}
-			updateUser(accountName, u);
-		} else {
-			ExtensibleObject sourceObject = new AccountExtensibleObject(acc, getServer());
-			try {
-				for (ExtensibleObjectMapping mapping : objectMappings) {
-					if (mapping.getSoffidObject().equals(SoffidObjectType.OBJECT_ACCOUNT)) {
-						if (objectTranslator.evalCondition(sourceObject, mapping)) {
-							ExtensibleObject obj = objectTranslator.generateObject(sourceObject, mapping);
-							if (obj != null)
-								updateGoogleAccount(accountName, acc, sourceObject);
-						} else {
-							disableUser(acc.getName());
-						}
+		if (acc == null) {
+			acc = new Account();
+			acc.setName(accountName);
+			acc.setDescription(description);
+			acc.setDisabled(true);
+			acc.setStatus(AccountStatus.REMOVED);
+		}
+		ExtensibleObject sourceObject = new AccountExtensibleObject(acc, getServer());
+		try {
+			for (ExtensibleObjectMapping mapping : objectMappings) {
+				if (mapping.getSoffidObject().equals(SoffidObjectType.OBJECT_ACCOUNT)) {
+					if (objectTranslator.evalCondition(sourceObject, mapping)) {
+						ExtensibleObject obj = objectTranslator.generateObject(sourceObject, mapping);
+						if (obj != null)
+							updateGoogleAccount(accountName, acc, sourceObject);
+					} else {
+						disableUser(acc.getName());
 					}
 				}
-			} catch (InternalErrorException e) {
-				throw e;
-			} catch (Exception e) {
-				throw new InternalErrorException(e.getMessage(), e);
 			}
+		} catch (InternalErrorException e) {
+			throw e;
+		} catch (Exception e) {
+			throw new InternalErrorException(e.getMessage(), e);
 		}
 	}
 
@@ -743,21 +771,28 @@ public class GoogleCloudAgent extends es.caib.seycon.ng.sync.agent.Agent
 				projects = getResourceManager().projects().list()
 						.setPageToken(projects == null ? null : projects.getNextPageToken()).execute();
 				for (Project project : projects.getProjects()) {
-					ListServiceAccountsResponse lsa = null;
-					do {
-						lsa = getIam().projects().serviceAccounts().list("projects/" + project.getProjectId())
-								.setPageToken(lsa == null ? null : lsa.getNextPageToken()).execute();
-						if (lsa.getAccounts() != null) {
-							for (ServiceAccount user : lsa.getAccounts()) {
-								r.add(user.getEmail());
-							}
+					if ("ACTIVE".equals(project.getLifecycleState())) {
+						ListServiceAccountsResponse lsa = null;
+						try {
+							do {
+								lsa = getIam().projects().serviceAccounts().list("projects/" + project.getProjectId())
+										.setPageToken(lsa == null ? null : lsa.getNextPageToken()).execute();
+								if (lsa.getAccounts() != null) {
+									for (ServiceAccount user : lsa.getAccounts()) {
+										r.add(user.getEmail());
+									}
+								}
+							} while (lsa.getNextPageToken() != null);
+						} catch (GoogleJsonResponseException e) {
+							if (e.getStatusCode() != 404) // Not Found
+								throw e;
 						}
-					} while (lsa.getNextPageToken() != null);
-					try {
-						com.google.api.services.cloudresourcemanager.model.Policy policy = 
-								rm.projects().getIamPolicy(project.getProjectId(), pr ).execute();
-						addPolicyMembers(r, policy);
-					} catch (Exception e) {
+						try {
+							com.google.api.services.cloudresourcemanager.model.Policy policy = 
+									rm.projects().getIamPolicy(project.getProjectId(), pr ).execute();
+							addPolicyMembers(r, policy);
+						} catch (Exception e) {
+						}
 					}
 				}
 			}

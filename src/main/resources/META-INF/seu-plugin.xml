@@ -58,7 +58,7 @@
 		<agent>
 		<name>GoogleCloud</name>
 		<javaClass>com.soffid.iam.sync.agent.googleapps.GoogleCloudAgent</javaClass>
-		<userInterface>GoogleAppsAgent.zul</userInterface>
+		<userInterface>GoogleCloudAgent.zul</userInterface>
 		<enableAccessControl>N</enableAccessControl>
 
 		<enableAttributeMapping>true</enableAttributeMapping>
